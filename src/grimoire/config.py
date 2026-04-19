@@ -25,9 +25,11 @@ class Settings(BaseSettings):
         description="Email for Crossref polite pool. Without it, rate limit drops 10x.",
     )
 
-    llm_judge_enabled: bool = False
-    llm_judge_model: str = "claude-sonnet-4-6"
+    # LLM features activate when anthropic_api_key is set. The same model is
+    # used for the ingest fallback (plan §6 Phase 1) and the dedup judge
+    # (plan §6 Phase 3). Split if the two need to diverge.
     anthropic_api_key: str | None = None
+    llm_model: str = "claude-sonnet-4-6"
 
     log_level: str = "INFO"
 

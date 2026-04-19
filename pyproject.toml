@@ -71,6 +71,17 @@ files = ["src/grimoire"]
 # pragmatic: external libs without stubs
 ignore_missing_imports = true
 
+# pymupdf ships partial/loose types; silence Any-return warnings at our
+# extraction boundary instead of salting the code with type: ignore.
+[[tool.mypy.overrides]]
+module = ["pymupdf", "pymupdf.*"]
+follow_imports = "skip"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = "grimoire.extract.pdf"
+disable_error_code = ["no-any-return"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

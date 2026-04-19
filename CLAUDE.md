@@ -17,8 +17,8 @@ Self-hosted literature server. Full design and rationale live in the implementat
 
 | Phase | What | Status |
 |-------|------|--------|
-| 0 | Infra scaffold (this commit) | done |
-| 1 | Ingestion core | todo |
+| 0 | Infra scaffold | done |
+| 1 | Ingestion core | done (deterministic dedup only; real MERGE in Phase 3) |
 | 2 | Search (FTS + embeddings + hybrid) | todo |
 | 3 | Deduplication (heart of the project) | todo |
 | 4 | MCP server | todo |
