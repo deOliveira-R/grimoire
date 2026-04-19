@@ -19,7 +19,7 @@ Self-hosted literature server. Full design and rationale live in the implementat
 |-------|------|--------|
 | 0 | Infra scaffold | done |
 | 1 | Ingestion core | done (deterministic dedup only; real MERGE in Phase 3) |
-| 2 | Search (FTS + embeddings + hybrid) | todo |
+| 2 | Search (FTS + embeddings + hybrid) | done (SPECTER2 + BGE-M3 lazy; RRF k=60) |
 | 3 | Deduplication (heart of the project) | todo |
 | 4 | MCP server | todo |
 | 5 | OPDS + minimal web UI | todo |

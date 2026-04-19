@@ -18,6 +18,7 @@ dependencies = [
     "typer>=0.13",
     "sqlite-vec>=0.1.6",
     "mcp>=1.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -86,3 +87,7 @@ disable_error_code = ["no-any-return"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+pythonpath = ["."]
+markers = [
+    "heavy: tests that download real ML models (skipped by default)",
+]
