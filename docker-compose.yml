@@ -1,0 +1,27 @@
+# Local dev: data lives under ./data/.
+# TrueNAS prod: override DATA_ROOT=/mnt/tank/grimoire in .env and the host bind-mount will follow.
+services:
+  grimoire-api:
+    build: .
+    container_name: grimoire-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      GRIMOIRE_DATA_ROOT: /data
+      GRIMOIRE_TRANSLATION_SERVER_URL: http://translation-server:1969
+      GRIMOIRE_CROSSREF_MAILTO: ${GRIMOIRE_CROSSREF_MAILTO:-}
+      GRIMOIRE_LLM_JUDGE_ENABLED: ${GRIMOIRE_LLM_JUDGE_ENABLED:-false}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - ${DATA_ROOT:-./data}:/data
+    depends_on:
+      translation-server:
+        condition: service_started
+
+  translation-server:
+    image: zotero/translation-server:latest
+    container_name: grimoire-translation-server
+    restart: unless-stopped
+    ports:
+      - "1969:1969"

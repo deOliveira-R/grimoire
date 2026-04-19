@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "grimoire"
+version = "0.1.0"
+description = "Self-hosted literature server with semantic search, dedup, and MCP."
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Rodrigo Oliveira" }]
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "typer>=0.13",
+    "sqlite-vec>=0.1.6",
+    "mcp>=1.0",
+]
+
+[project.optional-dependencies]
+ingest = [
+    "pymupdf>=1.24",
+    "ebooklib>=0.18",
+    "beautifulsoup4>=4.12",
+    "habanero>=1.2",
+    "arxiv>=2.1",
+    "httpx>=0.27",
+]
+ml = [
+    # SPECTER2 + BGE-M3. Heavy; install only where embeddings run.
+    "torch>=2.4",
+    "transformers>=4.44",
+    "sentence-transformers>=3.0",
+    "numpy>=1.26",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "hypothesis>=6.115",
+    "httpx>=0.27",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+]
+
+[project.scripts]
+grimoire = "grimoire.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/grimoire"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "PTH", "RET", "RUF"]
+ignore = ["E501"]  # let formatter handle long lines
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src/grimoire"]
+# pragmatic: external libs without stubs
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
