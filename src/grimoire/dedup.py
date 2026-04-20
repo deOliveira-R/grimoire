@@ -31,6 +31,7 @@ TIER4_MERGE_SIM = 0.97
 TIER4_JUDGE_LOW = 0.90
 TIER4_JUDGE_HIGH = 0.97
 TIER4_RELATED_NO_AUTHOR_SIM = 0.95
+TIER4_EDITION_SIM = 0.85  # plan §6 Phase 6b: edition-pair link threshold
 TIER4_NEIGHBORS = 10
 
 # Plan §7 invariant 3: every directional relation has a symmetric inverse so
@@ -203,6 +204,14 @@ def _tier4_semantic(
         neighbor_keys = _author_keys(conn, n.item_id)
         overlap = len(cand_keys & neighbor_keys)
 
+        # Edition check runs BEFORE the merge threshold: two items sharing
+        # authors and close-but-different content with distinct edition
+        # fields are editions of each other, not duplicates to merge.
+        if sim >= TIER4_EDITION_SIM and overlap >= 1:
+            edition_decision = _edition_decision(conn, candidate, n.item_id, sim)
+            if edition_decision is not None:
+                return edition_decision
+
         if sim >= TIER4_MERGE_SIM and overlap >= 1:
             return DedupDecision("merge", n.item_id, f"embed_sim_{sim:.3f}", None, sim)
 
@@ -226,6 +235,61 @@ def _tier4_semantic(
             return DedupDecision("link", n.item_id, f"related_no_overlap_{sim:.3f}", "related", sim)
 
     return None
+
+
+_EDITION_NUM_RE = re.compile(r"\d+")
+
+
+def _edition_decision(
+    conn: sqlite3.Connection,
+    candidate: Metadata,
+    neighbor_id: int,
+    sim: float,
+) -> DedupDecision | None:
+    """If candidate + neighbor have different edition fields, emit an
+    edition_of link. Direction is set so the newer item points at the
+    older via ``later_edition_of``."""
+    neighbor = conn.execute(
+        "SELECT edition, publication_year FROM items WHERE id=?", (neighbor_id,)
+    ).fetchone()
+    if neighbor is None:
+        return None
+    cand_ed = (candidate.edition or "").strip()
+    nb_ed = (neighbor["edition"] or "").strip()
+    if not cand_ed and not nb_ed:
+        return None
+
+    cand_num = _edition_num(cand_ed)
+    nb_num = _edition_num(nb_ed)
+    # "2" vs "2nd" are the same edition, don't treat as different.
+    if cand_ed and nb_ed:
+        if _norm_edition(cand_ed) == _norm_edition(nb_ed):
+            return None
+        if cand_num is not None and nb_num is not None and cand_num == nb_num:
+            return None
+    cand_year = candidate.publication_year
+    nb_year = neighbor["publication_year"]
+
+    # Decide whether the candidate is *later* than the neighbor.
+    if cand_num is not None and nb_num is not None:
+        cand_is_later = cand_num > nb_num
+    elif cand_year is not None and nb_year is not None and cand_year != nb_year:
+        cand_is_later = cand_year > nb_year
+    else:
+        # Ambiguous — default direction: candidate → later.
+        cand_is_later = True
+
+    relation = "later_edition_of" if cand_is_later else "earlier_edition_of"
+    return DedupDecision("link", neighbor_id, f"edition_sim_{sim:.3f}", relation, sim)
+
+
+def _edition_num(value: str) -> int | None:
+    m = _EDITION_NUM_RE.search(value)
+    return int(m.group(0)) if m else None
+
+
+def _norm_edition(value: str) -> str:
+    return " ".join(value.lower().split())
 
 
 # ---------- application ---------------------------------------------------

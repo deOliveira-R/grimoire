@@ -20,7 +20,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from grimoire import dedup
+from grimoire import book_split, dedup
 from grimoire.config import settings
 from grimoire.dedup import DedupDecision, JudgeFn
 from grimoire.embed.base import Embedder
@@ -118,6 +118,7 @@ def _act(
         item_id = _insert_item(conn, metadata, content_hash)
         _upsert_authors(conn, item_id, metadata.authors)
         _link_series_parent(conn, item_id, metadata)
+        _maybe_split_book(conn, item_id, metadata, content_hash)
         if item_embedder is not None:
             _embed_and_store(conn, item_id, metadata, item_embedder)
         return _record(conn, path, content_hash, "inserted", item_id, decision.reason)
@@ -143,6 +144,7 @@ def _act(
         item_id = _insert_item(conn, metadata, content_hash)
         _upsert_authors(conn, item_id, metadata.authors)
         _link_series_parent(conn, item_id, metadata)
+        _maybe_split_book(conn, item_id, metadata, content_hash)
         if item_embedder is not None:
             _embed_and_store(conn, item_id, metadata, item_embedder)
         dedup.apply_link(conn, item_id, target, relation, decision.confidence)
@@ -194,6 +196,22 @@ def _link_series_parent(conn: sqlite3.Connection, item_id: int, metadata: Metada
     if parent_id == item_id:
         return  # shouldn't happen, but guard anyway
     dedup.apply_link(conn, item_id, parent_id, "part_of", 1.0)
+
+
+def _maybe_split_book(
+    conn: sqlite3.Connection,
+    item_id: int,
+    metadata: Metadata,
+    content_hash: str,
+) -> None:
+    """Split books into chapter items if the file has a detectable structure.
+
+    ``item_type`` and ``edition_book`` both qualify: an edited volume comes
+    back from Crossref as ``item_type='book'`` with chapter DOIs we don't
+    follow, but pymupdf's TOC gives us the same split for free."""
+    if metadata.item_type != "book":
+        return
+    book_split.split_book(conn, item_id, content_hash)
 
 
 def _embed_and_store(

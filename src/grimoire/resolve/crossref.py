@@ -70,6 +70,7 @@ def _to_metadata(msg: dict[str, Any]) -> Metadata:
         volume=msg.get("volume"),
         issue=msg.get("issue"),
         pages=msg.get("page"),
+        edition=_edition(msg),
         language=msg.get("language"),
         item_type=item_type,
         authors=authors,
@@ -77,6 +78,17 @@ def _to_metadata(msg: dict[str, Any]) -> Metadata:
         confidence=1.0,
         raw={"crossref": msg},
     )
+
+
+def _edition(msg: dict[str, Any]) -> str | None:
+    """Crossref ships edition under several keys across product lines. Prefer
+    the explicit ``edition-number`` (usually a bare integer), then
+    ``edition``, then the ``edition_number`` alternate."""
+    for key in ("edition-number", "edition_number", "edition"):
+        val = msg.get(key)
+        if isinstance(val, (str, int)) and str(val).strip():
+            return str(val).strip()
+    return None
 
 
 def _first(xs: Any) -> str | None:

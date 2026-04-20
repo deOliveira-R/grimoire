@@ -43,7 +43,8 @@ def index_item(
     force: bool = False,
 ) -> IndexResult:
     row = conn.execute(
-        "SELECT title, abstract, content_hash FROM items WHERE id=?", (item_id,)
+        "SELECT title, abstract, item_type, content_hash FROM items WHERE id=?",
+        (item_id,),
     ).fetchone()
     if row is None:
         return IndexResult(item_id=item_id, status="failed", reason="item not found")
@@ -56,7 +57,14 @@ def index_item(
         return IndexResult(item_id=item_id, status="skipped", reason="already indexed")
 
     # Pages = per-page text from the primary file if we have one; else empty.
-    pages = _extract_pages(row["content_hash"])
+    # Chapter items don't carry their own file — pull pages from the parent
+    # book via the chapter_of relation + metadata_json page range.
+    if row["item_type"] == "chapter":
+        from grimoire.book_split import chapter_pages
+
+        pages = chapter_pages(conn, item_id)
+    else:
+        pages = _extract_pages(row["content_hash"])
     body_text = "\n\n".join(text for _, text in pages) if pages else None
 
     # Item embedding — SPECTER2 expects "title [SEP] abstract".
