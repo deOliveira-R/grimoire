@@ -271,6 +271,29 @@ def list_collections(conn: sqlite3.Connection) -> list[Collection]:
     ]
 
 
+def get_document_structure(
+    conn: sqlite3.Connection, item_id: int
+) -> dict[str, object] | None:
+    """Return the parsed structure of an item's GROBID TEI artifact.
+
+    Shape:
+        {
+          "header":     {"title", "abstract", "doi", "year", "authors": [...]},
+          "sections":   [{"level", "heading", "text"}, ...],
+          "references": [{"title", "authors", "year", "doi", "venue", "raw"}, ...]
+        }
+
+    Returns ``None`` when no TEI artifact exists for the item (not yet
+    processed — run ``grimoire artifacts build --kind grobid_tei``)."""
+    from grimoire.extract import tei as tei_parser
+    from grimoire.storage import artifacts
+
+    data = artifacts.read(conn, item_id, "grobid_tei")
+    if data is None:
+        return None
+    return tei_parser.parse_structure(data)
+
+
 def find_by_tag(conn: sqlite3.Connection, tag: str, limit: int = 100) -> list[ItemSummary]:
     rows = conn.execute(
         """SELECT i.id, i.item_type, i.title, i.publication_year, i.doi, i.arxiv_id, i.venue

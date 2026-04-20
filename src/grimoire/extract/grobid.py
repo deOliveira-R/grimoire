@@ -134,6 +134,50 @@ def _year(header: ET.Element) -> int | None:
     return None
 
 
+def extract_fulltext(path: Path, *, timeout: float = 300.0) -> bytes | None:
+    """Call ``/api/processFulltextDocument`` — returns full TEI XML for the
+    whole paper (header + body sections + bibliography + references).
+
+    Slower than ``extract_header`` (3–10 s per paper typically) so this is
+    expected to run from a backfill sweep (``grimoire artifacts build``),
+    not from the ingest hot path.
+
+    Returns the raw TEI bytes on success, ``None`` on GROBID unreachable /
+    invalid response. Lossy errors are logged; the caller treats a ``None``
+    as "try again later" (idempotent re-runs via ``--force`` or by deleting
+    the artifact row)."""
+    if not settings.grobid_url:
+        return None
+    url = settings.grobid_url.rstrip("/") + "/api/processFulltextDocument"
+    try:
+        with path.open("rb") as fh:
+            r = httpx.post(
+                url,
+                files={"input": (path.name, fh, "application/pdf")},
+                data={
+                    # consolidateHeader=0 keeps GROBID offline so batch runs
+                    # don't hit the same Crossref rate limits our resolver does.
+                    "consolidateHeader": "0",
+                    # Include structured references with the body text.
+                    "consolidateCitations": "0",
+                    "includeRawCitations": "1",
+                    "segmentSentences": "0",
+                    "teiCoordinates": "0",
+                },
+                timeout=timeout,
+            )
+        r.raise_for_status()
+    except Exception as exc:
+        log.warning("GROBID fulltext failed for %s: %s", path, exc)
+        return None
+    # Validate we got TEI (not an HTML error page) before handing it off.
+    body = r.content
+    if b"<TEI" not in body[:2048]:
+        log.warning("GROBID returned non-TEI body for %s", path)
+        return None
+    return body
+
+
 def ping(url: str | None = None, timeout: float = 3.0) -> bool:
     """Cheap reachability check for the GROBID service."""
     target = (url or settings.grobid_url or "").rstrip("/")

@@ -166,6 +166,17 @@ def list_collections() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+def get_document_structure(item_id: int) -> dict[str, Any] | None:
+    """Return the parsed structure of the item's GROBID TEI artifact: header,
+    body sections (with headings + text), and bibliography references.
+
+    Returns ``None`` if no TEI artifact exists yet for this item — run
+    ``grimoire artifacts build --kind grobid_tei`` to produce them."""
+    with _db() as conn:
+        return tools_impl.get_document_structure(conn, item_id)
+
+
+@mcp.tool()
 def find_by_tag(tag: str, limit: int = 100) -> list[dict[str, Any]]:
     """List items carrying a given tag, newest first."""
     with _db() as conn:

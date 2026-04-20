@@ -12,6 +12,8 @@ from grimoire.db import apply_migrations, connect
 app = typer.Typer(help="Grimoire literature server CLI.", no_args_is_help=True)
 migrate_app = typer.Typer(help="One-shot migrations from other libraries.")
 app.add_typer(migrate_app, name="migrate")
+artifacts_app = typer.Typer(help="Build / inspect per-item derived artifacts.")
+app.add_typer(artifacts_app, name="artifacts")
 
 
 @app.command()
@@ -287,6 +289,137 @@ def migrate_zotero(
         typer.echo(f"  failures:              {len(report.failures)}")
         for f in report.failures[:5]:
             typer.echo(f"    - {f}")
+
+
+@artifacts_app.command("build")
+def artifacts_build(
+    kind: str = typer.Option(
+        "grobid_tei",
+        "--kind",
+        help="Artifact kind to build. Currently only 'grobid_tei' is supported.",
+    ),
+    force: bool = typer.Option(
+        False, "--force", help="Regenerate artifacts that already exist."
+    ),
+    limit: int | None = typer.Option(None, "--limit"),
+    workers: int = typer.Option(
+        4, "--workers", "-j", help="Parallel GROBID requests (server-side limit applies)."
+    ),
+) -> None:
+    """Generate derived artifacts for all items that are missing them.
+
+    Example:
+      GRIMOIRE_GROBID_URL=http://localhost:8070 \\
+        grimoire artifacts build --kind grobid_tei -j 8
+    """
+    if kind != "grobid_tei":
+        raise typer.BadParameter(f"unsupported kind {kind!r}; only 'grobid_tei' for now")
+    # Narrow the str from Typer to the literal storage type expects.
+    artifact_kind: "artifacts.Kind" = "grobid_tei"
+
+    from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+    from grimoire.extract import grobid
+    from grimoire.storage import artifacts
+    from grimoire.storage.cas import CAS
+
+    if not settings.grobid_url:
+        typer.echo("GRIMOIRE_GROBID_URL is unset — set it to your running GROBID.")
+        raise typer.Exit(code=2)
+
+    conn = connect()
+    apply_migrations(conn)
+
+    if force:
+        ids = [
+            int(r["item_id"])
+            for r in conn.execute(
+                "SELECT item_id FROM item_artifacts WHERE kind = 'primary' ORDER BY item_id"
+            ).fetchall()
+        ]
+    else:
+        ids = artifacts.items_missing_kind(
+            conn, artifact_kind, primary_only=True, limit=limit
+        )
+    if limit is not None:
+        ids = ids[:limit]
+
+    typer.echo(f"{len(ids)} item(s) to process with GROBID fulltext (workers={workers}).")
+    if not ids:
+        return
+
+    cas = CAS(settings.files_root)
+
+    # Stage 1: resolve each item to its on-disk PDF path (main thread; the
+    # sqlite connection is not safe to share with workers). A ``str`` entry
+    # is a skip reason; a ``Path`` entry means "run GROBID on this path".
+    from pathlib import Path as _Path
+
+    tasks: list[tuple[int, _Path | str]] = []
+    for item_id in ids:
+        h = artifacts.get_hash(conn, item_id, "primary")
+        if h is None:
+            tasks.append((item_id, "no-primary-artifact"))
+            continue
+        path = cas.path_for_hash(h)
+        if not path.exists():
+            tasks.append((item_id, "cas-blob-missing"))
+            continue
+        tasks.append((item_id, path))
+
+    # Stage 2: submit GROBID calls to worker threads. Workers only touch the
+    # filesystem + HTTP; they never see the DB connection.
+    def _run(path: _Path) -> bytes | None:
+        return grobid.extract_fulltext(path)
+
+    ok = failed = 0
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_item: dict[Future[bytes | None], int] = {}
+        for item_id, path_or_reason in tasks:
+            if isinstance(path_or_reason, str):
+                # Skip case — log + count immediately, no GROBID call.
+                typer.echo(f"  [{item_id:>6}] {path_or_reason}")
+                failed += 1
+                continue
+            future_to_item[pool.submit(_run, path_or_reason)] = item_id
+
+        # Stage 3: drain futures, write DB rows back on the main thread.
+        for fut in as_completed(future_to_item):
+            item_id = future_to_item[fut]
+            try:
+                data = fut.result()
+            except Exception as exc:
+                typer.echo(f"  [{item_id:>6}] grobid-error: {exc}")
+                failed += 1
+                continue
+            if data is None:
+                typer.echo(f"  [{item_id:>6}] grobid-failed")
+                failed += 1
+                continue
+            artifacts.store(
+                conn, item_id, artifact_kind, data, source="grobid-fulltext"
+            )
+            typer.echo(f"  [{item_id:>6}] ok")
+            ok += 1
+
+    typer.echo("")
+    typer.echo(f"Summary: {ok} ok, {failed} failed")
+
+
+@artifacts_app.command("status")
+def artifacts_status() -> None:
+    """Count artifacts by kind."""
+    conn = connect()
+    apply_migrations(conn)
+    rows = conn.execute(
+        """SELECT kind, COUNT(*) AS n, SUM(size_bytes) AS bytes
+           FROM item_artifacts GROUP BY kind ORDER BY kind"""
+    ).fetchall()
+    total_items = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+    typer.echo(f"items: {total_items}")
+    for r in rows:
+        size = r["bytes"] or 0
+        size_mb = size / (1 << 20)
+        typer.echo(f"  {r['kind']:<14} {r['n']:>6}  {size_mb:>8.1f} MB")
 
 
 if __name__ == "__main__":
