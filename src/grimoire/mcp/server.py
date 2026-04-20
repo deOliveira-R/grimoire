@@ -123,12 +123,15 @@ def get_snippets(query: str, item_id: int | None = None, k: int = 10) -> list[di
 
 @mcp.tool()
 def list_related(item_id: int, kind: str = "all") -> list[dict[str, Any]]:
-    """List related items. ``kind`` ∈ {all, preprint_chain, semantic, citations}.
-    preprint_chain covers preprint↔published and edition relations; semantic
-    is the 'related' relation surfaced by tier-4 dedup; citations covers
-    explicit cite/cited_by."""
-    if kind not in {"all", "preprint_chain", "semantic", "citations"}:
-        raise ValueError("kind must be one of all|preprint_chain|semantic|citations")
+    """List related items. ``kind`` ∈ {all, preprint_chain, structural, semantic, citations}.
+
+    - preprint_chain covers preprint↔published and edition relations
+    - structural covers chapter↔book and volume↔multi-volume-set (part_of)
+    - semantic is the 'related' relation surfaced by tier-4 dedup
+    - citations covers explicit cite/cited_by
+    """
+    if kind not in {"all", "preprint_chain", "structural", "semantic", "citations"}:
+        raise ValueError("kind must be one of all|preprint_chain|structural|semantic|citations")
     with _db() as conn:
         rel = tools_impl.list_related(conn, item_id, kind)  # type: ignore[arg-type]
     return [_dump(r) for r in rel]

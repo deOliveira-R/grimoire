@@ -117,6 +117,7 @@ def _act(
         cas.store_file(path)
         item_id = _insert_item(conn, metadata, content_hash)
         _upsert_authors(conn, item_id, metadata.authors)
+        _link_series_parent(conn, item_id, metadata)
         if item_embedder is not None:
             _embed_and_store(conn, item_id, metadata, item_embedder)
         return _record(conn, path, content_hash, "inserted", item_id, decision.reason)
@@ -129,6 +130,9 @@ def _act(
         # content is identical, this is a no-op on disk.
         cas.store_file(path)
         dedup.apply_merge(conn, target, metadata)
+        # Post-merge: the target may have just gained a series field from the
+        # candidate, so the parent-link step can newly apply.
+        _link_series_parent(conn, target, metadata)
         return _record(conn, path, content_hash, "merged", target, decision.reason)
 
     if decision.outcome == "link":
@@ -138,6 +142,7 @@ def _act(
         cas.store_file(path)
         item_id = _insert_item(conn, metadata, content_hash)
         _upsert_authors(conn, item_id, metadata.authors)
+        _link_series_parent(conn, item_id, metadata)
         if item_embedder is not None:
             _embed_and_store(conn, item_id, metadata, item_embedder)
         dedup.apply_link(conn, item_id, target, relation, decision.confidence)
@@ -145,6 +150,50 @@ def _act(
 
     # skip
     return _record(conn, path, content_hash, "skipped", decision.target_id, decision.reason)
+
+
+def _link_series_parent(conn: sqlite3.Connection, item_id: int, metadata: Metadata) -> None:
+    """If this item declares a series, find or auto-create a synthetic `book`
+    parent for that series and link via `part_of` (plan §6 Phase 6, multi-
+    volume works).
+
+    The parent item has no file/DOI — it's a logical grouping. metadata_source
+    is 'derived' so indexers and dedup scans can skip it.
+    """
+    series = (metadata.series or "").strip()
+    if not series:
+        return
+    # Only volume-style items get a parent. Papers occasionally carry a series
+    # field (book series of proceedings) but we don't want a synthetic parent
+    # per conference.
+    if metadata.item_type not in {"book", "chapter", "report"}:
+        return
+
+    row = conn.execute(
+        """SELECT id FROM items
+           WHERE metadata_source = 'derived' AND title = ? AND item_type = 'book'""",
+        (series,),
+    ).fetchone()
+    if row is not None:
+        parent_id = int(row["id"])
+    else:
+        cur = conn.execute(
+            """INSERT INTO items(item_type, title, metadata_source, metadata_confidence)
+               VALUES ('book', ?, 'derived', 0.5)""",
+            (series,),
+        )
+        parent_id = int(cur.lastrowid)  # type: ignore[arg-type]
+        # Log the derived row so the conservation invariant (plan §7 #1) holds
+        # without having to special-case metadata_source in the test.
+        conn.execute(
+            """INSERT INTO ingest_log(source_path, content_hash, result, item_id)
+               VALUES (?, NULL, 'inserted', ?)""",
+            (f"<auto-series: {series}>", parent_id),
+        )
+
+    if parent_id == item_id:
+        return  # shouldn't happen, but guard anyway
+    dedup.apply_link(conn, item_id, parent_id, "part_of", 1.0)
 
 
 def _embed_and_store(

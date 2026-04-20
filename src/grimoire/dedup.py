@@ -42,6 +42,8 @@ _INVERSE_RELATION: dict[str, str] = {
     "corrected_by": "erratum_for",
     "chapter_of": "contains_chapter",
     "contains_chapter": "chapter_of",
+    "part_of": "contains_part",
+    "contains_part": "part_of",
     "later_edition_of": "earlier_edition_of",
     "earlier_edition_of": "later_edition_of",
     "translates": "translated_from",

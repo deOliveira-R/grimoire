@@ -98,7 +98,11 @@ def index_all(
     force: bool = False,
     limit: int | None = None,
 ) -> list[IndexResult]:
-    q = "SELECT id FROM items ORDER BY id"
+    q = (
+        "SELECT id FROM items "
+        "WHERE metadata_source IS NULL OR metadata_source != 'derived' "
+        "ORDER BY id"
+    )
     if limit is not None:
         q += f" LIMIT {int(limit)}"
     ids = [row["id"] for row in conn.execute(q).fetchall()]

@@ -192,7 +192,7 @@ def get_snippets(
     return results
 
 
-RelationKind = Literal["all", "preprint_chain", "semantic", "citations"]
+RelationKind = Literal["all", "preprint_chain", "structural", "semantic", "citations"]
 
 
 def list_related(
@@ -201,6 +201,9 @@ def list_related(
     filters: tuple[str, ...]
     if kind == "preprint_chain":
         filters = ("preprint_of", "published_as", "later_edition_of", "earlier_edition_of")
+    elif kind == "structural":
+        # Chapter↔book and volume↔set (plan §6 Phase 6 part_of / contains_part).
+        filters = ("chapter_of", "contains_chapter", "part_of", "contains_part")
     elif kind == "semantic":
         filters = ("related",)
     elif kind == "citations":
