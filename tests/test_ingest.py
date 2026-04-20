@@ -57,14 +57,14 @@ def test_ingest_is_idempotent_by_hash(
     tmp_db: sqlite3.Connection, pdf_with_doi: Path, pdf_copy: Path, stub_crossref: None
 ) -> None:
     """Oracle check 2: ingest the same PDF twice → exactly one item in DB,
-    no file duplicated in store."""
+    no file duplicated in store. Tier-1 hash match returns 'merged' per plan §3."""
     from grimoire.config import settings
     from grimoire.storage.cas import CAS
 
     first = ingest.ingest_file(tmp_db, pdf_with_doi)
     assert first.outcome == "inserted"
     second = ingest.ingest_file(tmp_db, pdf_copy)
-    assert second.outcome == "skipped"
+    assert second.outcome == "merged"
     assert second.item_id == first.item_id
 
     n_items = tmp_db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
@@ -75,7 +75,7 @@ def test_ingest_is_idempotent_by_hash(
 
     cas = CAS(settings.files_root)
     files = [p for p in cas.root.rglob("*") if p.is_file()]
-    assert len(files) == 1
+    assert len(files) == 1  # same hash → one file in CAS
 
 
 def test_ingest_no_identifier_no_llm_marks_manual_required(
@@ -112,18 +112,19 @@ def test_ingest_dedup_by_doi(
     second = ingest.ingest_file(tmp_db, other)
 
     assert first.outcome == "inserted"
-    assert second.outcome == "skipped"
+    assert second.outcome == "merged"  # Phase 3: tier-1 DOI match → MERGE per plan §3
     assert second.item_id == first.item_id
 
     n_items = tmp_db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     assert n_items == 1
 
-    # Phase 1: tier-1 identifier match skips without touching CAS. Plan §3's
-    # "keep both files if hashes differ" is merge semantics, deferred to
-    # Phase 3 (real MERGE with file-version attachment).
+    # Both files live in CAS — plan §3 MERGE semantics: "Keep both files if
+    # hashes differ, attach as versions". file_versions table itself lands in
+    # a later phase; for now the extra bytes just sit in the content-addressed
+    # store referenced via ingest_log.
     cas = CAS(settings.files_root)
     files = [p for p in cas.root.rglob("*") if p.is_file()]
-    assert len(files) == 1
+    assert len(files) == 2
 
 
 def test_ingest_directory_recursive(
@@ -138,15 +139,15 @@ def test_ingest_directory_recursive(
 def test_conservation_invariant_holds(
     tmp_db: sqlite3.Connection, pdf_with_doi: Path, pdf_copy: Path, stub_crossref: None
 ) -> None:
-    """Plan §7 invariant 1: every ingestion that produced a record lands in
-    items OR merge_history. Skipped/failed attempts are logged for audit but
-    don't count toward conservation."""
+    """Plan §7 invariant 1: every ingestion that produced a NEW item lands in
+    items or merge_history. 'merged' at ingest time attaches a file to an
+    existing item without creating a new row — it's not counted here."""
     ingest.ingest_file(tmp_db, pdf_with_doi)
     ingest.ingest_file(tmp_db, pdf_copy)
 
     items = tmp_db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     merges = tmp_db.execute("SELECT COUNT(*) FROM merge_history").fetchone()[0]
-    productive = tmp_db.execute(
-        "SELECT COUNT(*) FROM ingest_log WHERE result IN ('inserted','merged')"
+    new_item_events = tmp_db.execute(
+        "SELECT COUNT(*) FROM ingest_log WHERE result IN ('inserted','linked')"
     ).fetchone()[0]
-    assert items + merges == productive
+    assert items + merges == new_item_events

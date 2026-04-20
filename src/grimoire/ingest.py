@@ -1,11 +1,16 @@
-"""Ingestion pipeline: identifier extraction → resolvers → deterministic dedup → insert.
+"""Ingestion pipeline: identifier extraction → resolvers → tiered dedup → insert.
 
-Phase 1 only implements the deterministic (tier 1) layer of the dedup algorithm
-from plan §3: DOI / arXiv / ISBN / content-hash exact matches. Semantic dedup
-(embeddings + LLM judge) arrives in Phase 3.
+Implements plan §3 in full: tier-1 deterministic match (DOI / arXiv / ISBN /
+hash) → tier-2 erratum regex → tier-3 arXiv preprint↔published linking → tier-4
+semantic (SPECTER2 + author-overlap + optional LLM judge).
 
-The pipeline is single-writer by design — the plan's §8 callout about
-sqlite-vec's serial-write constraint applies here too."""
+Tier-4 needs a loaded embedder, so it's opt-in via the ``item_embedder``
+parameter. For single-file CLI ingestion we default to deterministic-only so
+the user doesn't pay the model-load cost on every invocation. Batch migration
+(``grimoire index``, ``grimoire dedup-scan``) pass the embedder in.
+
+The pipeline is single-writer by design — plan §8 callout about sqlite-vec's
+serial-write constraint applies here too."""
 
 from __future__ import annotations
 
@@ -15,14 +20,18 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
+from grimoire import dedup
 from grimoire.config import settings
+from grimoire.dedup import DedupDecision, JudgeFn
+from grimoire.embed.base import Embedder
+from grimoire.extract import grobid
 from grimoire.extract import pdf as pdf_extract
 from grimoire.identify import identify
 from grimoire.models import (
     Author,
     IngestResult,
     Metadata,
-    prefer_more_authoritative,
+    merge_metadata_layered,
 )
 from grimoire.resolve import arxiv_api, crossref, llm_fallback, openlibrary
 from grimoire.storage.cas import CAS
@@ -35,8 +44,18 @@ SUPPORTED_SUFFIXES = {".pdf", ".epub"}
 # ---------- public API -----------------------------------------------------
 
 
-def ingest_file(conn: sqlite3.Connection, path: Path) -> IngestResult:
-    """Ingest a single file. Idempotent by content hash and by resolved DOI/arXiv/ISBN."""
+def ingest_file(
+    conn: sqlite3.Connection,
+    path: Path,
+    *,
+    item_embedder: Embedder | None = None,
+    llm_judge: JudgeFn | None = None,
+) -> IngestResult:
+    """Ingest a single file through the tiered dedup algorithm (plan §3).
+
+    If ``item_embedder`` is provided, tier-4 semantic dedup runs. Without it,
+    only deterministic tiers 1-3 run — which is the desired default for the
+    single-file CLI path."""
     path = path.resolve()
     if not path.is_file():
         return _fail(conn, path, None, "not a file")
@@ -46,36 +65,102 @@ def ingest_file(conn: sqlite3.Connection, path: Path) -> IngestResult:
     cas = CAS(settings.files_root)
     content_hash = CAS.hash_file(path)
 
-    # Tier 1a: content-hash match. Exact byte-identical re-ingest → no-op.
+    # Short-circuit: byte-identical re-ingest doesn't need to hit Crossref/GROBID
+    # again. This is tier-1 hash_match semantically — we still log as 'merged'
+    # to match plan §3, but the DB is already consistent and apply_merge would
+    # no-op.
     existing = conn.execute("SELECT id FROM items WHERE content_hash=?", (content_hash,)).fetchone()
     if existing:
-        return _record(conn, path, content_hash, "skipped", existing["id"], "hash_match")
+        return _record(conn, path, content_hash, "merged", int(existing["id"]), "hash_match")
 
-    # Resolve metadata.
     try:
         metadata = _resolve_metadata(path)
     except Exception as exc:
         log.exception("resolution failed for %s", path)
         return _fail(conn, path, content_hash, f"resolve error: {exc}")
 
-    # Tier 1b-1d: deterministic identifier matches against existing items.
-    matched = _match_by_identifier(conn, metadata)
-    if matched is not None:
-        return _record(conn, path, content_hash, "skipped", matched, "identifier_match")
+    decision = dedup.decide(
+        conn,
+        metadata,
+        content_hash,
+        item_embedder=item_embedder,
+        llm_judge=llm_judge,
+    )
 
-    # Insert.
-    _, _ = cas.store_file(path)
-    item_id = _insert_item(conn, metadata, content_hash)
-    _upsert_authors(conn, item_id, metadata.authors)
-    return _record(conn, path, content_hash, "inserted", item_id, metadata.source)
+    return _act(conn, decision, path, content_hash, metadata, cas, item_embedder)
 
 
-def ingest_path(conn: sqlite3.Connection, root: Path, recursive: bool = True) -> list[IngestResult]:
+def ingest_path(
+    conn: sqlite3.Connection,
+    root: Path,
+    recursive: bool = True,
+    *,
+    item_embedder: Embedder | None = None,
+    llm_judge: JudgeFn | None = None,
+) -> list[IngestResult]:
     """Ingest a single file or walk a directory."""
     root = root.resolve()
-    if root.is_file():
-        return [ingest_file(conn, root)]
-    return [ingest_file(conn, p) for p in _walk(root, recursive)]
+    files = [root] if root.is_file() else list(_walk(root, recursive))
+    return [ingest_file(conn, p, item_embedder=item_embedder, llm_judge=llm_judge) for p in files]
+
+
+def _act(
+    conn: sqlite3.Connection,
+    decision: DedupDecision,
+    path: Path,
+    content_hash: str,
+    metadata: Metadata,
+    cas: CAS,
+    item_embedder: Embedder | None,
+) -> IngestResult:
+    if decision.outcome == "insert":
+        cas.store_file(path)
+        item_id = _insert_item(conn, metadata, content_hash)
+        _upsert_authors(conn, item_id, metadata.authors)
+        if item_embedder is not None:
+            _embed_and_store(conn, item_id, metadata, item_embedder)
+        return _record(conn, path, content_hash, "inserted", item_id, decision.reason)
+
+    if decision.outcome == "merge":
+        target = decision.target_id
+        assert target is not None
+        # Store the file even though no new item is created — the bytes are
+        # kept in CAS so we don't lose the source. CAS dedups by hash so if the
+        # content is identical, this is a no-op on disk.
+        cas.store_file(path)
+        dedup.apply_merge(conn, target, metadata)
+        return _record(conn, path, content_hash, "merged", target, decision.reason)
+
+    if decision.outcome == "link":
+        target = decision.target_id
+        relation = decision.relation
+        assert target is not None and relation is not None
+        cas.store_file(path)
+        item_id = _insert_item(conn, metadata, content_hash)
+        _upsert_authors(conn, item_id, metadata.authors)
+        if item_embedder is not None:
+            _embed_and_store(conn, item_id, metadata, item_embedder)
+        dedup.apply_link(conn, item_id, target, relation, decision.confidence)
+        return _record(conn, path, content_hash, "linked", item_id, decision.reason)
+
+    # skip
+    return _record(conn, path, content_hash, "skipped", decision.target_id, decision.reason)
+
+
+def _embed_and_store(
+    conn: sqlite3.Connection, item_id: int, metadata: Metadata, embedder: Embedder
+) -> None:
+    """Embed the new item immediately so later ingestions in the same batch
+    can find it via tier-4 semantic search."""
+    from grimoire.embed.base import l2_normalize, serialize_float32
+    from grimoire.embed.specter2 import format_item_text
+
+    text = format_item_text(metadata.title or "", metadata.abstract)
+    vec = l2_normalize(embedder.encode([text]))[0]
+    conn.execute(
+        "INSERT OR REPLACE INTO item_embeddings(item_id, embedding) VALUES (?, ?)",
+        (item_id, serialize_float32(vec)),
+    )
 
 
 # ---------- internals ------------------------------------------------------
@@ -99,34 +184,50 @@ def _resolve_metadata(path: Path) -> Metadata:
 
         first_page = epub_extract.extract_text(path)[:8000]
 
-    ids = identify(first_page)
     candidates: list[Metadata] = []
 
-    for doi in ids.dois:
+    # GROBID first on PDFs — gives us title+abstract directly from the header,
+    # bypassing Crossref's ~99% abstract-miss rate (Phase 2 oracle finding).
+    if suffix == ".pdf" and settings.grobid_url:
+        grobid_md = grobid.extract_header(path)
+        if grobid_md is not None:
+            candidates.append(grobid_md)
+
+    # Collect identifier candidates from GROBID's output *and* the regex pass,
+    # so the downstream resolvers get the union.
+    ids = identify(first_page)
+    dois = list(ids.dois)
+    if candidates and candidates[0].doi and candidates[0].doi not in dois:
+        dois.insert(0, candidates[0].doi)
+    arxiv_ids = list(ids.arxiv_ids)
+    isbns = list(ids.isbns)
+
+    for doi in dois:
         md = crossref.resolve(doi)
         if md is not None:
             candidates.append(md)
             break  # One hit is enough; further DOIs on the page rarely refer to the same paper.
 
-    for arxiv_id in ids.arxiv_ids:
+    for arxiv_id in arxiv_ids:
         md = arxiv_api.resolve(arxiv_id)
         if md is not None:
             candidates.append(md)
             break
 
-    for isbn in ids.isbns:
+    for isbn in isbns:
         md = openlibrary.resolve(isbn)
         if md is not None:
             candidates.append(md)
             break
 
+    # LLM fallback only when nothing else produced metadata.
     if not candidates:
         llm_md = llm_fallback.resolve(first_page)
         if llm_md is not None:
             candidates.append(llm_md)
 
     if candidates:
-        return prefer_more_authoritative(candidates)
+        return merge_metadata_layered(candidates)
 
     # Nothing worked. Mark for manual review (oracle check 3).
     return Metadata(
@@ -139,22 +240,6 @@ def _resolve_metadata(path: Path) -> Metadata:
 
 def _guess_type(path: Path) -> str:
     return "book" if path.suffix.lower() == ".epub" else "paper"
-
-
-def _match_by_identifier(conn: sqlite3.Connection, md: Metadata) -> int | None:
-    if md.doi:
-        row = conn.execute("SELECT id FROM items WHERE doi=?", (md.doi,)).fetchone()
-        if row:
-            return int(row["id"])
-    if md.arxiv_id:
-        row = conn.execute("SELECT id FROM items WHERE arxiv_id=?", (md.arxiv_id,)).fetchone()
-        if row:
-            return int(row["id"])
-    if md.isbn:
-        row = conn.execute("SELECT id FROM items WHERE isbn=?", (md.isbn,)).fetchone()
-        if row:
-            return int(row["id"])
-    return None
 
 
 def _insert_item(conn: sqlite3.Connection, md: Metadata, content_hash: str) -> int:
@@ -199,38 +284,9 @@ def _relative_cas_path(content_hash: str) -> str:
 
 
 def _upsert_authors(conn: sqlite3.Connection, item_id: int, authors: list[Author]) -> None:
-    for position, author in enumerate(authors):
-        if not author.family_name:
-            continue
-        author_id = _upsert_author(conn, author)
-        conn.execute(
-            """INSERT OR IGNORE INTO item_authors(item_id, author_id, position, role)
-               VALUES (?,?,?, 'author')""",
-            (item_id, author_id, position),
-        )
-
-
-def _upsert_author(conn: sqlite3.Connection, author: Author) -> int:
-    if author.orcid:
-        row = conn.execute("SELECT id FROM authors WHERE orcid=?", (author.orcid,)).fetchone()
-        if row:
-            return int(row["id"])
-
-    # No orcid match: look up by normalized_key; accept name collisions
-    # (plan §8 — disambiguation beyond last-name + first-initial is v2).
-    row = conn.execute(
-        "SELECT id FROM authors WHERE normalized_key=? AND orcid IS ?",
-        (author.normalized_key, author.orcid),
-    ).fetchone()
-    if row:
-        return int(row["id"])
-
-    cur = conn.execute(
-        """INSERT INTO authors(family_name, given_name, orcid, normalized_key)
-           VALUES (?,?,?,?)""",
-        (author.family_name, author.given_name, author.orcid, author.normalized_key),
-    )
-    return int(cur.lastrowid)  # type: ignore[arg-type]
+    # Delegates to the dedup module's author helpers so ingest-time and
+    # dedup-time author handling stay identical.
+    dedup._union_authors(conn, item_id, authors)
 
 
 def _record(

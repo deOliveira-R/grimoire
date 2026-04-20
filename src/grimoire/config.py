@@ -19,6 +19,10 @@ class Settings(BaseSettings):
         description="Root dataset. TrueNAS prod: /mnt/tank/grimoire.",
     )
     translation_server_url: str = "http://translation-server:1969"
+    grobid_url: str | None = Field(
+        default=None,
+        description="GROBID service URL (e.g. http://grobid:8070). None disables it.",
+    )
 
     crossref_mailto: str | None = Field(
         default=None,

@@ -90,6 +90,73 @@ def index(
     typer.echo("Summary: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
 
 
+@app.command("dedup-scan")
+def dedup_scan(
+    limit: int | None = typer.Option(None, "--limit", help="Cap items scanned"),
+    semantic: bool = typer.Option(
+        True, "--semantic/--no-semantic", help="Run tier-4 (needs ml extras)"
+    ),
+) -> None:
+    """Dry-run: apply the tiered dedup algorithm to existing items, print
+    candidate merges/links without mutating the DB."""
+    from grimoire import dedup
+    from grimoire.models import Author, Metadata
+
+    conn = connect()
+    apply_migrations(conn)
+
+    emb = None
+    judge = None
+    if semantic:
+        from grimoire.dedup_llm import judge as llm_judge
+        from grimoire.embed.specter2 import Specter2Embedder
+
+        emb = Specter2Embedder()
+        judge = llm_judge
+
+    query = "SELECT id, title, abstract, doi, arxiv_id, isbn, content_hash FROM items ORDER BY id"
+    if limit:
+        query += f" LIMIT {int(limit)}"
+    rows = conn.execute(query).fetchall()
+
+    counts: Counter[str] = Counter()
+    for row in rows:
+        authors = [
+            Author(family_name=r["family_name"], given_name=r["given_name"])
+            for r in conn.execute(
+                """SELECT a.family_name, a.given_name FROM item_authors ia
+                   JOIN authors a ON a.id = ia.author_id
+                   WHERE ia.item_id=? ORDER BY ia.position""",
+                (row["id"],),
+            )
+        ]
+        cand = Metadata(
+            title=row["title"],
+            abstract=row["abstract"],
+            doi=row["doi"],
+            arxiv_id=row["arxiv_id"],
+            isbn=row["isbn"],
+            authors=authors,
+        )
+        decision = dedup.decide(
+            conn,
+            cand,
+            content_hash=row["content_hash"],
+            item_embedder=emb,
+            llm_judge=judge,
+            exclude_item_id=int(row["id"]),
+        )
+        counts[decision.outcome] += 1
+        if decision.outcome in {"merge", "link"}:
+            typer.echo(
+                f"[{decision.outcome.upper():6s}] item_id={row['id']:>4d} → "
+                f"target={decision.target_id:>4d}  reason={decision.reason}  "
+                f"conf={decision.confidence:.3f}"
+            )
+    typer.echo("")
+    typer.echo("Summary: " + ", ".join(f"{v} {k}" for k, v in sorted(counts.items())))
+
+
 @app.command()
 def search(
     query: str = typer.Argument(...),

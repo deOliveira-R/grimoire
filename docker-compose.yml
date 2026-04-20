@@ -10,6 +10,7 @@ services:
     environment:
       GRIMOIRE_DATA_ROOT: /data
       GRIMOIRE_TRANSLATION_SERVER_URL: http://translation-server:1969
+      GRIMOIRE_GROBID_URL: http://grobid:8070
       GRIMOIRE_CROSSREF_MAILTO: ${GRIMOIRE_CROSSREF_MAILTO:-}
       GRIMOIRE_LLM_JUDGE_ENABLED: ${GRIMOIRE_LLM_JUDGE_ENABLED:-false}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -18,6 +19,8 @@ services:
     depends_on:
       translation-server:
         condition: service_started
+      grobid:
+        condition: service_started
 
   translation-server:
     image: zotero/translation-server:latest
@@ -25,3 +28,14 @@ services:
     restart: unless-stopped
     ports:
       - "1969:1969"
+
+  # GROBID: structural extraction of title/abstract/authors/DOI from PDF headers.
+  # CPU-only CRF build — ~1.8 GB image, ~500 MB RAM idle, ~1-3 s per paper.
+  grobid:
+    image: lfoppiano/grobid:0.8.1
+    container_name: grimoire-grobid
+    restart: unless-stopped
+    ports:
+      - "8070:8070"
+    environment:
+      JAVA_OPTS: "-Xmx1g"

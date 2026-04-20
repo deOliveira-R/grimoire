@@ -12,6 +12,7 @@ from typing import Any, Literal
 SourceName = Literal[
     "crossref",
     "arxiv",
+    "grobid",
     "openlibrary",
     "llm",
     "zotero_import",
@@ -19,10 +20,14 @@ SourceName = Literal[
     "manual_required",
 ]
 
-# Plan §3 merge semantics: Crossref > arXiv > OpenLibrary > LLM.
+# Plan §3 merge semantics: Crossref > arXiv > GROBID > OpenLibrary > LLM.
+# GROBID sits between arXiv and OpenLibrary: it's highly structural for the
+# fields Crossref routinely omits (title + abstract), but not authoritative
+# for bibliographic plumbing (venue/volume/issue/pages).
 _SOURCE_RANK: dict[str, int] = {
-    "crossref": 4,
-    "arxiv": 3,
+    "crossref": 5,
+    "arxiv": 4,
+    "grobid": 3,
     "openlibrary": 2,
     "llm": 1,
     "zotero_import": 0,
@@ -70,6 +75,59 @@ class Metadata:
 def prefer_more_authoritative(candidates: list[Metadata]) -> Metadata:
     """Return the Metadata with the highest-ranked source; break ties by confidence."""
     return max(candidates, key=lambda m: (_SOURCE_RANK.get(m.source, -2), m.confidence))
+
+
+# Fields merged by merge_metadata_layered. Lists (authors) and blobs (raw) are
+# handled separately because their "missing" semantics differ.
+_MERGEABLE_SCALAR_FIELDS = (
+    "title",
+    "abstract",
+    "publication_year",
+    "doi",
+    "arxiv_id",
+    "isbn",
+    "venue",
+    "volume",
+    "issue",
+    "pages",
+    "series",
+    "series_number",
+    "edition",
+    "language",
+    "item_type",
+)
+
+
+def merge_metadata_layered(candidates: list[Metadata]) -> Metadata:
+    """Merge Metadata from multiple resolvers into one, preferring authoritative
+    sources on overlap but backfilling missing fields from less-authoritative ones.
+
+    Concrete use: Crossref is authoritative for the bibliographic plumbing
+    (DOI / venue / volume / issue / pages), but routinely omits the abstract.
+    GROBID parses the abstract directly from the PDF. This function keeps
+    Crossref's values where present and fills the abstract from GROBID."""
+    if not candidates:
+        raise ValueError("merge_metadata_layered: no candidates")
+    ranked = sorted(
+        candidates,
+        key=lambda m: (_SOURCE_RANK.get(m.source, -2), m.confidence),
+        reverse=True,
+    )
+    # Start from the highest-ranked as a shallow copy.
+    from dataclasses import replace
+
+    base = replace(ranked[0])
+    for other in ranked[1:]:
+        for name in _MERGEABLE_SCALAR_FIELDS:
+            if getattr(base, name) in (None, "") and getattr(other, name) not in (None, ""):
+                setattr(base, name, getattr(other, name))
+        if not base.authors and other.authors:
+            base.authors = list(other.authors)
+        if other.raw:
+            merged = dict(base.raw or {})
+            merged.update(other.raw)
+            base.raw = merged
+    return base
 
 
 @dataclass(slots=True)
