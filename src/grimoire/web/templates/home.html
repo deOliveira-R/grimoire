@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% block title %}
+  {%- if q -%}{{ q }} — Grimoire
+  {%- elif active_collection_name -%}{{ active_collection_name }} — Grimoire
+  {%- elif active_venue -%}{{ active_venue }} — Grimoire
+  {%- elif active_year -%}{{ active_year }} — Grimoire
+  {%- elif active_tag -%}{{ active_tag }} — Grimoire
+  {%- elif active_type -%}{{ active_type|capitalize }} — Grimoire
+  {%- else -%}Grimoire
+  {%- endif -%}
+{% endblock %}
+
+{% macro qs_with(overrides) -%}
+  {#- Preserve all current filters + sort; apply any overrides. Use value=None
+      in overrides to drop that key from the output. -#}
+  {%- set merged = {} -%}
+  {%- for k, v in active_filters.items() -%}{%- set _ = merged.update({k: v}) -%}{%- endfor -%}
+  {%- if sort and sort != 'added' -%}{%- set _ = merged.update({'sort': sort}) -%}{%- endif -%}
+  {%- for k, v in overrides.items() -%}
+    {%- if v is none -%}{%- set _ = merged.pop(k, None) -%}
+    {%- else -%}{%- set _ = merged.update({k: v|string}) -%}
+    {%- endif -%}
+  {%- endfor -%}
+  {%- set parts = [] -%}
+  {%- for k, v in merged.items() -%}
+    {%- set _ = parts.append(k ~ '=' ~ (v|urlencode)) -%}
+  {%- endfor -%}
+  {{ '?' + (parts | join('&')) if parts else '/' }}
+{%- endmacro %}
+
+{% block topbar_search %}
+<form class="search" method="get" action="/">
+  <input type="search" name="q" placeholder="Search title / abstract…"
+         value="{{ q }}" autocomplete="off">
+  {# Preserve the non-search filter context on submit #}
+  {% for k, v in active_filters.items() if k != 'q' %}
+    <input type="hidden" name="{{ k }}" value="{{ v }}">
+  {% endfor %}
+  {% if sort != 'added' %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+</form>
+{% endblock %}
+
+{% block body %}
+<main class="page">
+  <aside class="sidebar">
+    {% if collections %}
+    <section>
+      <h2>Collections</h2>
+      <div class="scroll-box">
+        <ul>
+          {% for c in collections %}
+          <li>
+            <a href="{{ qs_with({'collection': c.collection_id}) }}"
+               class="{% if active_collection == c.collection_id %}active{% endif %}"
+               title="{{ c.name }}">{{ c.name }}</a>
+            <span class="count">{{ c.item_count }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+
+    <section>
+      <h2>Type</h2>
+      <ul>
+        <li><a href="{{ qs_with({'type': None}) }}"
+               class="{% if not active_type %}active{% endif %}">All</a></li>
+        {% for item_type, count in type_counts %}
+        <li>
+          <a href="{{ qs_with({'type': item_type}) }}"
+             class="{% if active_type == item_type %}active{% endif %}">
+            {{ item_type|capitalize }}
+          </a>
+          <span class="count">{{ count }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    {% if venue_counts %}
+    <section>
+      <h2>Journal</h2>
+      <div class="scroll-box">
+        <ul>
+          {% for v in venue_counts %}
+          <li>
+            <a href="{{ qs_with({'venue': v.venue}) }}"
+               class="{% if active_venue == v.venue %}active{% endif %}"
+               title="{{ v.venue }}">{{ v.venue }}</a>
+            <span class="count">{{ v.item_count }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if year_counts %}
+    <section>
+      <h2>Year</h2>
+      <div class="scroll-box">
+        <ul>
+          {% for y in year_counts %}
+          <li>
+            <a href="{{ qs_with({'year': y.year}) }}"
+               class="{% if active_year == y.year %}active{% endif %}">{{ y.year }}</a>
+            <span class="count">{{ y.item_count }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if tag_counts %}
+    <section>
+      <h2>Tags</h2>
+      <div class="scroll-box">
+        <ul>
+          {% for t in tag_counts %}
+          <li>
+            <a href="{{ qs_with({'tag': t.name}) }}"
+               class="{% if active_tag == t.name %}active{% endif %}">{{ t.name }}</a>
+            <span class="count">{{ t.item_count }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </section>
+    {% endif %}
+  </aside>
+
+  <section class="items">
+    <div class="toolbar">
+      <div class="chips">
+        {% if not active_filters %}
+          <span style="color: var(--text-mute); font-size: 12px;">
+            Showing all items
+          </span>
+        {% endif %}
+        {% for k, v in active_filters.items() %}
+          {%- set label = v -%}
+          {%- if k == 'collection' and active_collection_name -%}
+            {%- set label = active_collection_name -%}
+          {%- endif -%}
+          <span class="chip chip-{{ k }}">
+            <span>{{ k }}: {{ label }}</span>
+            <a class="clear" href="{{ qs_with({k: None}) }}" title="Clear {{ k }}">×</a>
+          </span>
+        {% endfor %}
+      </div>
+      <div class="count-and-sort">
+        <span>{{ total }} item{{ '' if total == 1 else 's' }}</span>
+        {% if not q %}
+        <form method="get" action="/" style="display: inline;">
+          {% for k, v in active_filters.items() %}
+            <input type="hidden" name="{{ k }}" value="{{ v }}">
+          {% endfor %}
+          <label style="color: var(--text-mute); font-size: 12px;">
+            Sort:
+            <select name="sort" onchange="this.form.submit()">
+              {% for key, label in sort_labels.items() %}
+                <option value="{{ key }}" {% if sort == key %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if items|length == 0 %}
+      <div class="empty">
+        <p>No items match these filters.</p>
+        {% if active_filters %}
+          <p><a href="/">Clear all filters</a></p>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    <ol class="item-list">
+      {% for item in items %}
+      <li class="item-row">
+        <div class="main">
+          <h3><a href="/items/{{ item.item_id }}">{{ item.title }}</a></h3>
+          <div class="meta">
+            <span class="tag">{{ item.item_type }}</span>
+            {% if item.authors -%}
+              {{ item.authors[:3] | join(", ") }}{% if item.authors|length > 3 %} et&nbsp;al.{% endif %}
+            {%- endif -%}
+            {% if item.year %} · {{ item.year }}{% endif -%}
+            {% if item.venue %}
+              · <a href="{{ qs_with({'venue': item.venue, 'offset': 0}) }}"><em>{{ item.venue }}</em></a>
+            {%- endif -%}
+            {% if item.volume %} · vol.&nbsp;{{ item.volume }}{%- endif -%}
+            {%- if item.issue %}({{ item.issue }}){%- endif -%}
+            {% if item.pages %} · pp.&nbsp;{{ item.pages }}{%- endif -%}
+          </div>
+          {% if item.abstract %}
+          <p class="abstract">{{ item.abstract }}</p>
+          {% endif %}
+        </div>
+        <div class="row-actions">
+          {% if item.doi %}
+            <a href="https://doi.org/{{ item.doi }}" target="_blank" rel="noreferrer"
+               title="Open DOI">DOI</a>
+          {% endif %}
+          <a href="/items/{{ item.item_id }}/bibtex" target="_blank"
+             title="Copy / download BibTeX">Cite</a>
+          {% if item.content_hash %}
+            <a href="/files/{{ item.content_hash }}" title="Download source file">Download</a>
+          {% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ol>
+
+    <nav class="pager">
+      {% if offset > 0 %}
+        {% set prev = [0, offset - limit] | max %}
+        <a href="{{ qs_with({'offset': prev, 'limit': limit}) }}">← Prev</a>
+      {% endif %}
+      <span class="spacer"></span>
+      <span>
+        {% if total > 0 %}
+          {{ offset + 1 }}–{{ [offset + limit, total] | min }} of {{ total }}
+        {% endif %}
+      </span>
+      <span class="spacer"></span>
+      {% if offset + limit < total %}
+        <a href="{{ qs_with({'offset': offset + limit, 'limit': limit}) }}">Next →</a>
+      {% endif %}
+    </nav>
+  </section>
+</main>
+
+<script>
+  // '/' focuses the search box (Zotero-ish shortcut); avoid capturing when
+  // the user is already typing in a form field.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) {
+      const input = document.querySelector('header.topbar input[name="q"]');
+      if (input) { e.preventDefault(); input.focus(); input.select(); }
+    }
+  });
+</script>
+{% endblock %}

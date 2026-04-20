@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}{{ item.title }} — Grimoire{% endblock %}
+{% block body %}
+<article class="detail">
+  <p class="back-link"><a href="/">← Browse</a></p>
+
+  <h1>{{ item.title }}</h1>
+
+  <p class="byline">
+    {% if item.authors %}
+      {% for author in item.authors %}
+        <a href="/?q={{ author|urlencode }}">{{ author }}</a>{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    {% endif %}
+    {% if item.year %}
+      {% if item.authors %} · {% endif %}{{ item.year }}
+    {% endif %}
+    {% if item.venue %}
+      {% if item.authors or item.year %} · {% endif %}
+      <a href="/?venue={{ item.venue|urlencode }}"><em>{{ item.venue }}</em></a>
+      {% if item.volume %} · vol.&nbsp;{{ item.volume }}{% endif %}
+      {%- if item.issue %}({{ item.issue }}){%- endif -%}
+      {% if item.pages %} · pp.&nbsp;{{ item.pages }}{% endif %}
+    {% endif %}
+  </p>
+
+  <div class="actions">
+    {% if item.content_hash %}
+      <a href="/files/{{ item.content_hash }}" class="primary">Download</a>
+    {% endif %}
+    {% if item.doi %}
+      <a href="https://doi.org/{{ item.doi }}" target="_blank" rel="noreferrer">Open DOI ↗</a>
+    {% endif %}
+    {% if item.arxiv_id %}
+      <a href="https://arxiv.org/abs/{{ item.arxiv_id }}" target="_blank" rel="noreferrer">arXiv ↗</a>
+    {% endif %}
+    <a href="/items/{{ item.item_id }}/bibtex" target="_blank">BibTeX ↗</a>
+  </div>
+
+  {% if item.abstract %}
+    <h2>Abstract</h2>
+    <p>{{ item.abstract }}</p>
+  {% endif %}
+
+  <h2>Details</h2>
+  <dl class="meta">
+    <dt>Type</dt><dd>{{ item.item_type }}</dd>
+    {% if item.doi %}
+      <dt>DOI</dt><dd><code><a href="https://doi.org/{{ item.doi }}" target="_blank" rel="noreferrer">{{ item.doi }}</a></code></dd>
+    {% endif %}
+    {% if item.arxiv_id %}
+      <dt>arXiv</dt><dd><code><a href="https://arxiv.org/abs/{{ item.arxiv_id }}" target="_blank" rel="noreferrer">{{ item.arxiv_id }}</a></code></dd>
+    {% endif %}
+    {% if item.isbn %}<dt>ISBN</dt><dd><code>{{ item.isbn }}</code></dd>{% endif %}
+    {% if item.language %}<dt>Language</dt><dd>{{ item.language }}</dd>{% endif %}
+    {% if tags %}
+      <dt>Tags</dt>
+      <dd>
+        {% for t in tags %}<a class="tag" href="/?tag={{ t|urlencode }}">{{ t }}</a>{% endfor %}
+      </dd>
+    {% endif %}
+    {% if collections %}
+      <dt>Collections</dt>
+      <dd>
+        {% for c in collections %}
+          <a href="/?collection={{ c.id }}">{{ c.name }}</a>{% if not loop.last %}, {% endif %}
+        {% endfor %}
+      </dd>
+    {% endif %}
+  </dl>
+
+  {% if chapters %}
+    <h2>Chapters ({{ chapters|length }})</h2>
+    <ul class="related-list">
+      {% for c in chapters %}
+      <li>
+        <a href="/items/{{ c.item_id }}">{{ c.title }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if related %}
+    <h2>Related</h2>
+    <ul class="related-list">
+      {% for r in related %}
+      <li>
+        <span class="tag">{{ r.relation }}</span>
+        <a href="/items/{{ r.item_id }}">{{ r.title }}</a>
+        {% if r.year %} ({{ r.year }}){% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if bibtex %}
+    <h2>BibTeX</h2>
+    <div class="bibtex-wrap">
+      <button class="copy" type="button" onclick="copyBib(this)">Copy</button>
+      <pre class="bibtex" id="bibtex-{{ item.item_id }}">{{ bibtex }}</pre>
+    </div>
+  {% endif %}
+</article>
+
+<script>
+  function copyBib(btn) {
+    const pre = btn.parentElement.querySelector('pre.bibtex');
+    navigator.clipboard.writeText(pre.textContent).then(() => {
+      const original = btn.textContent;
+      btn.textContent = 'Copied ✓';
+      setTimeout(() => { btn.textContent = original; }, 1200);
+    });
+  }
+</script>
+{% endblock %}
