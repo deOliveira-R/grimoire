@@ -10,6 +10,8 @@ from grimoire.config import settings
 from grimoire.db import apply_migrations, connect
 
 app = typer.Typer(help="Grimoire literature server CLI.", no_args_is_help=True)
+migrate_app = typer.Typer(help="One-shot migrations from other libraries.")
+app.add_typer(migrate_app, name="migrate")
 
 
 @app.command()
@@ -221,6 +223,70 @@ def search(
             page = f" p.{h.snippet.page}" if h.snippet.page else ""
             excerpt = h.snippet.text[:300].replace("\n", " ")
             typer.echo(f"     {page}  {excerpt}")
+
+
+@migrate_app.command("zotero")
+def migrate_zotero(
+    library_path: Path = typer.Option(  # noqa: B008
+        Path.home() / "Documents/Biblioteca/#Zotero/zotero.sqlite",
+        "--library-path",
+        "-l",
+        help="Path to zotero.sqlite.",
+    ),
+    storage_dir: Path = typer.Option(  # noqa: B008
+        Path.home() / "Documents/Biblioteca/#Zotero/storage",
+        "--storage-dir",
+        "-s",
+        help="Zotero storage/ directory containing attached PDFs.",
+    ),
+    limit: int | None = typer.Option(None, "--limit", help="Cap the number of items to import."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Report what would happen without writing to the grimoire DB."
+    ),
+    semantic: bool = typer.Option(
+        False, "--semantic", help="Run tier-4 semantic dedup during import (slower; needs ml)."
+    ),
+) -> None:
+    """Import items from a local Zotero SQLite library."""
+    from grimoire.migrate.zotero import migrate
+
+    conn = connect()
+    apply_migrations(conn)
+
+    item_embedder = None
+    llm_judge = None
+    if semantic:
+        from grimoire.dedup_llm import judge as llm_judge_fn
+        from grimoire.embed.specter2 import Specter2Embedder
+
+        item_embedder = Specter2Embedder()
+        llm_judge = llm_judge_fn
+
+    report = migrate(
+        conn,
+        library_path=library_path,
+        storage_dir=storage_dir,
+        limit=limit,
+        dry_run=dry_run,
+        item_embedder=item_embedder,
+        llm_judge=llm_judge,
+    )
+
+    typer.echo("")
+    typer.echo(f"Zotero migration report (source: {library_path}):")
+    typer.echo(f"  candidates:            {report.total_candidates}")
+    if dry_run:
+        typer.echo("  (dry-run — no rows written)")
+        return
+    typer.echo(f"  inserted:              {report.inserted}")
+    typer.echo(f"  merged (tier-1 match): {report.merged}")
+    typer.echo(f"  skipped (already in):  {report.skipped_already_imported}")
+    typer.echo(f"  skipped (no title):    {report.skipped_no_metadata}")
+    typer.echo(f"  PDFs stored in CAS:    {report.pdf_attachments_stored}")
+    if report.failures:
+        typer.echo(f"  failures:              {len(report.failures)}")
+        for f in report.failures[:5]:
+            typer.echo(f"    - {f}")
 
 
 if __name__ == "__main__":

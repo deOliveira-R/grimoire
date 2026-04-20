@@ -22,9 +22,9 @@ Self-hosted literature server. Full design and rationale live in the implementat
 | 2 | Search (FTS + embeddings + hybrid) | done (SPECTER2 + BGE-M3 lazy; RRF k=60) |
 | 3 | Deduplication (heart of the project) | done (tiered + GROBID pre-extractor; 100% precision/recall on 100-item oracle) |
 | 4 | MCP server | done (9 tools mounted at /mcp via FastMCP streamable-http) |
-| 5 | OPDS + minimal web UI | todo |
-| 6 | Book-specific features | todo |
-| 7 | Zotero migration | todo |
+| 5 | OPDS + minimal web UI | done (Atom 1.2 feeds + /files CAS streamer + Jinja2 browse/detail UI; upload/submit-url deferred to v1.1) |
+| 6 | Book-specific features | done (PDF/EPUB chapter split via TOC/spine; tier-4 edition detection; Crossref edition field) |
+| 7 | Zotero migration | done (`grimoire migrate zotero` reads local SQLite; 100% field-match on 50-item oracle) |
 
 ## Run
 
@@ -32,9 +32,15 @@ Self-hosted literature server. Full design and rationale live in the implementat
 pip install -e ".[dev,ingest]"
 grimoire init-db
 grimoire serve --reload            # local dev
+grimoire migrate zotero --dry-run  # preview the Zotero import
+grimoire migrate zotero            # full bootstrap from ~/.../zotero.sqlite
 pytest                             # oracle checks
 docker compose up                  # full stack (api + translation-server)
 ```
+
+## Deployment
+
+**LAN-only** for v1. `grimoire serve` binds 0.0.0.0 with no auth — safe behind the home network, not safe on the public internet. Exposing /opds, /files, or the web UI externally requires a reverse proxy with basic auth or OAuth in front.
 
 ## Self-correcting invariants (plan §7)
 
