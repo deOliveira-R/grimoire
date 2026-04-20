@@ -32,10 +32,31 @@ def init_db() -> None:
 
 @app.command()
 def serve(host: str = "0.0.0.0", port: int = 8000, reload: bool = False) -> None:
-    """Run the FastAPI server."""
+    """Run the FastAPI server (health + MCP at /mcp + OPDS once Phase 5 lands)."""
     import uvicorn
 
     uvicorn.run("grimoire.app:app", host=host, port=port, reload=reload)
+
+
+@app.command()
+def mcp(
+    transport: str = typer.Option("stdio", "--transport", help="stdio | streamable-http"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8001, "--port"),
+) -> None:
+    """Run just the MCP server (useful for Claude Desktop / testing).
+
+    For production the MCP endpoint is mounted into `grimoire serve` at /mcp."""
+    from grimoire.mcp.server import mcp as mcp_server
+
+    if transport == "stdio":
+        mcp_server.run()
+    elif transport == "streamable-http":
+        mcp_server.settings.host = host
+        mcp_server.settings.port = port
+        mcp_server.run(transport="streamable-http")
+    else:
+        raise typer.BadParameter("transport must be stdio | streamable-http")
 
 
 @app.command()

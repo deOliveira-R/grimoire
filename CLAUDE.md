@@ -21,7 +21,7 @@ Self-hosted literature server. Full design and rationale live in the implementat
 | 1 | Ingestion core | done (deterministic dedup only; real MERGE in Phase 3) |
 | 2 | Search (FTS + embeddings + hybrid) | done (SPECTER2 + BGE-M3 lazy; RRF k=60) |
 | 3 | Deduplication (heart of the project) | done (tiered + GROBID pre-extractor; 100% precision/recall on 100-item oracle) |
-| 4 | MCP server | todo |
+| 4 | MCP server | done (9 tools mounted at /mcp via FastMCP streamable-http) |
 | 5 | OPDS + minimal web UI | todo |
 | 6 | Book-specific features | todo |
 | 7 | Zotero migration | todo |
