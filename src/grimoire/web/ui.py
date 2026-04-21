@@ -22,11 +22,38 @@ from grimoire.mcp.citation import to_bibtex
 from grimoire.mcp.tools import list_related as list_related_items
 from grimoire.search import keyword as keyword_search
 from grimoire.web import queries
+from grimoire.web.jinja_filters import highlight
 
 router = APIRouter(tags=["web"])
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
+templates.env.filters["highlight"] = highlight
+
+
+def _has_descendant_active(
+    node: "queries.CollectionTreeNode", active_id: int | None
+) -> bool:
+    if active_id is None:
+        return False
+    if node.collection.collection_id == active_id:
+        return True
+    return any(_has_descendant_active(ch, active_id) for ch in node.children)
+
+
+templates.env.globals["has_descendant_active"] = _has_descendant_active
+
+
+def _prune_empty_collection_branches(
+    nodes: list["queries.CollectionTreeNode"],
+) -> list["queries.CollectionTreeNode"]:
+    """Drop subtrees where no node and no descendant has any item."""
+    out: list[queries.CollectionTreeNode] = []
+    for n in nodes:
+        n.children = _prune_empty_collection_branches(n.children)
+        if n.descendants_count > 0:
+            out.append(n)
+    return out
 
 
 def _db() -> Iterator[sqlite3.Connection]:
@@ -56,6 +83,7 @@ _SORT_LABELS: dict[str, str] = {
     "year": "Year (newest)",
     "year_asc": "Year (oldest)",
     "title": "Title (A–Z)",
+    "author": "First author (A–Z)",
 }
 
 
@@ -108,7 +136,12 @@ def home(
     tag_counts = [t for t in queries.list_tags_with_counts(conn) if t.item_count > 0]
     venue_counts = queries.list_venues_with_counts(conn, limit=50)
     year_counts = queries.list_years_with_counts(conn)
-    collections = [c for c in queries.list_collections(conn) if c.item_count > 0]
+    # Full forest, then prune branches where nothing under the subtree has
+    # any items. A parent with empty ``item_count`` but non-empty descendants
+    # still renders as a container.
+    collection_tree = _prune_empty_collection_branches(
+        queries.list_collections_tree(conn)
+    )
 
     # Look up the active collection's name for breadcrumb display.
     active_collection_name: str | None = None
@@ -150,7 +183,7 @@ def home(
             "tag_counts": tag_counts,
             "venue_counts": venue_counts,
             "year_counts": year_counts,
-            "collections": collections,
+            "collections": collection_tree,
             "sort": sort if sort in _SORT_LABELS else queries.DEFAULT_SORT,
             "sort_labels": _SORT_LABELS,
         },

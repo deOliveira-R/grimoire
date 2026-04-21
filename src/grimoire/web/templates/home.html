@@ -43,19 +43,39 @@
 {% block body %}
 <main class="page">
   <aside class="sidebar">
+    {% macro render_col(node) -%}
+      {%- set self_active = active_collection == node.collection.collection_id -%}
+      {%- set desc_active = has_descendant_active(node, active_collection) -%}
+      {%- if node.children -%}
+        <li class="col-node">
+          <details {% if self_active or desc_active %}open{% endif %}>
+            <summary>
+              <a href="{{ qs_with({'collection': node.collection.collection_id}) }}"
+                 class="{% if self_active %}active{% endif %}"
+                 title="{{ node.collection.name }}">{{ node.collection.name }}</a>
+              <span class="count">{{ node.descendants_count }}</span>
+            </summary>
+            <ul>
+              {% for ch in node.children %}{{ render_col(ch) }}{% endfor %}
+            </ul>
+          </details>
+        </li>
+      {%- else -%}
+        <li>
+          <a href="{{ qs_with({'collection': node.collection.collection_id}) }}"
+             class="{% if self_active %}active{% endif %}"
+             title="{{ node.collection.name }}">{{ node.collection.name }}</a>
+          <span class="count">{{ node.collection.item_count }}</span>
+        </li>
+      {%- endif -%}
+    {%- endmacro %}
+
     {% if collections %}
     <section>
       <h2>Collections</h2>
       <div class="scroll-box">
-        <ul>
-          {% for c in collections %}
-          <li>
-            <a href="{{ qs_with({'collection': c.collection_id}) }}"
-               class="{% if active_collection == c.collection_id %}active{% endif %}"
-               title="{{ c.name }}">{{ c.name }}</a>
-            <span class="count">{{ c.item_count }}</span>
-          </li>
-          {% endfor %}
+        <ul class="col-tree">
+          {% for node in collections %}{{ render_col(node) }}{% endfor %}
         </ul>
       </div>
     </section>
@@ -183,7 +203,7 @@
       {% for item in items %}
       <li class="item-row">
         <div class="main">
-          <h3><a href="/items/{{ item.item_id }}">{{ item.title }}</a></h3>
+          <h3><a href="/items/{{ item.item_id }}">{{ item.title|highlight(q) }}</a></h3>
           <div class="meta">
             <span class="tag">{{ item.item_type }}</span>
             {% if item.authors -%}
@@ -198,7 +218,7 @@
             {% if item.pages %} · pp.&nbsp;{{ item.pages }}{%- endif -%}
           </div>
           {% if item.abstract %}
-          <p class="abstract">{{ item.abstract }}</p>
+          <p class="abstract">{{ (item.abstract|truncate(280))|highlight(q) }}</p>
           {% endif %}
         </div>
         <div class="row-actions">

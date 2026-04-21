@@ -146,6 +146,34 @@
       max-height: 240px;
       overflow-y: auto;
     }
+    aside.sidebar ul.col-tree ul {
+      padding-left: .7rem;
+      border-left: 1px solid var(--border);
+      margin: .1rem 0 .1rem .35rem;
+    }
+    aside.sidebar .col-node > details > summary {
+      display: flex; align-items: baseline; gap: .25rem;
+      cursor: pointer;
+      list-style: revert;
+    }
+    aside.sidebar .col-node > details > summary > a {
+      flex: 1;
+      padding: .14rem .4rem;
+      border-radius: var(--radius);
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    aside.sidebar .col-node > details > summary > a:hover {
+      background: var(--bg-hover);
+      text-decoration: none;
+    }
+    aside.sidebar .col-node > details > summary > a.active {
+      background: var(--accent-bg);
+      color: var(--accent);
+      font-weight: 600;
+    }
 
     /* --- items column ---------------------------------------------------- */
     section.items {
@@ -384,6 +412,16 @@
       padding: 3rem 1rem; text-align: center;
       color: var(--text-mute);
       font: 14px var(--ui-font);
+    }
+
+    mark {
+      background: rgba(255, 215, 0, 0.35);
+      color: inherit;
+      padding: 0 1px;
+      border-radius: 2px;
+    }
+    @media (prefers-color-scheme: dark) {
+      mark { background: rgba(255, 193, 7, 0.35); }
     }
   </style>
 </head>

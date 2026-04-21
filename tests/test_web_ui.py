@@ -145,10 +145,45 @@ def test_home_search(client: TestClient) -> None:
     r = client.get("/", params={"q": "boron"})
     assert r.status_code == 200
     body = r.text
-    assert "Boron dilution" in body
+    # Title still renders — check on words unaffected by the highlight wrap.
+    assert "dilution transients in PWR" in body
     # Search term surfaces as an active-filter chip
     assert "q: boron" in body
     assert "handbook" not in body
+
+
+def test_home_search_highlights_query_terms(
+    seeded_db: sqlite3.Connection, client: TestClient
+) -> None:
+    body = client.get("/", params={"q": "boron"}).text
+    # Case-insensitive wrap in <mark> on title and abstract
+    assert "<mark>Boron</mark>" in body or "<mark>boron</mark>" in body
+
+
+def test_home_search_highlight_is_case_insensitive(client: TestClient) -> None:
+    body = client.get("/", params={"q": "BORON"}).text
+    # Input was uppercase but title has "Boron" — must still be wrapped
+    assert "<mark>Boron</mark>" in body
+
+
+def test_home_no_highlight_without_query(client: TestClient) -> None:
+    body = client.get("/").text
+    assert "<mark>" not in body
+
+
+def test_home_search_highlight_escapes_html(
+    seeded_db: sqlite3.Connection, client: TestClient
+) -> None:
+    seeded_db.execute(
+        "UPDATE items SET title='XSS probe <script>alert(1)</script>' "
+        "WHERE title LIKE 'Boron%PWR'"
+    )
+    # Query the tokens present in the rewritten title so FTS5 returns a hit.
+    body = client.get("/", params={"q": "XSS"}).text
+    # Highlight happens; script tag is escaped, no raw <script> in output
+    assert "<mark>XSS</mark>" in body
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;" in body
 
 
 def test_home_empty_search_shows_empty_state(client: TestClient) -> None:
@@ -275,6 +310,76 @@ def test_home_shows_collections_sidebar(client: TestClient) -> None:
     assert "Reactor safety" in body
 
 
+def test_list_collections_tree_rolls_up_counts(
+    seeded_db: sqlite3.Connection,
+) -> None:
+    from grimoire.web.queries import list_collections_tree
+
+    cur_a = seeded_db.execute(
+        "INSERT INTO collections(name, parent_id) VALUES ('A', NULL)"
+    )
+    a_id = int(cur_a.lastrowid)  # type: ignore[arg-type]
+    cur_b = seeded_db.execute(
+        "INSERT INTO collections(name, parent_id) VALUES ('B', ?)", (a_id,)
+    )
+    b_id = int(cur_b.lastrowid)  # type: ignore[arg-type]
+    # Seed the paper into B so A (empty) should roll up to count 1.
+    paper_id = seeded_db.execute(
+        "SELECT id FROM items WHERE title LIKE 'Boron%PWR'"
+    ).fetchone()["id"]
+    seeded_db.execute(
+        "INSERT INTO item_collections(item_id, collection_id) VALUES (?, ?)",
+        (paper_id, b_id),
+    )
+
+    roots = list_collections_tree(seeded_db)
+    by_name = {n.collection.name: n for n in roots}
+    assert "A" in by_name
+    a = by_name["A"]
+    assert a.collection.item_count == 0
+    assert a.descendants_count == 1
+    assert [c.collection.name for c in a.children] == ["B"]
+    b = a.children[0]
+    assert b.collection.item_count == 1
+    assert b.descendants_count == 1
+
+
+def test_home_collections_render_nested_tree(
+    seeded_db: sqlite3.Connection, client: TestClient
+) -> None:
+    # Build A > B > C, with the paper moved into C. Assert all three names
+    # render and that the URL filtering on C works end-to-end.
+    cur_a = seeded_db.execute(
+        "INSERT INTO collections(name, parent_id) VALUES ('Physics', NULL)"
+    )
+    a_id = int(cur_a.lastrowid)  # type: ignore[arg-type]
+    cur_b = seeded_db.execute(
+        "INSERT INTO collections(name, parent_id) VALUES ('Nuclear', ?)", (a_id,)
+    )
+    b_id = int(cur_b.lastrowid)  # type: ignore[arg-type]
+    cur_c = seeded_db.execute(
+        "INSERT INTO collections(name, parent_id) VALUES ('Reactors', ?)", (b_id,)
+    )
+    c_id = int(cur_c.lastrowid)  # type: ignore[arg-type]
+    # Move the existing paper into the leaf.
+    paper_id = seeded_db.execute(
+        "SELECT id FROM items WHERE title LIKE 'Boron%PWR'"
+    ).fetchone()["id"]
+    seeded_db.execute(
+        "INSERT INTO item_collections(item_id, collection_id) VALUES (?, ?)",
+        (paper_id, c_id),
+    )
+
+    body = client.get("/").text
+    assert "Physics" in body
+    assert "Nuclear" in body
+    assert "Reactors" in body
+    # Clicking on the leaf filters to its items
+    r = client.get("/", params={"collection": c_id})
+    assert r.status_code == 200
+    assert "Boron dilution transients in PWR" in r.text
+
+
 def test_home_collection_filter(
     client: TestClient, seeded_db: sqlite3.Connection
 ) -> None:
@@ -300,6 +405,7 @@ def test_home_sort_selector_is_rendered(client: TestClient) -> None:
     assert "Recently added" in body
     assert "Year (newest)" in body
     assert "Title (A–Z)" in body
+    assert "First author (A–Z)" in body
 
 
 def test_home_sort_year_asc_reorders(
@@ -311,6 +417,43 @@ def test_home_sort_year_asc_reorders(
     idx_paper = body_year_asc.find("Boron dilution transients in PWR</a>")
     assert idx_book != -1 and idx_paper != -1
     assert idx_book < idx_paper
+
+
+def test_home_sort_by_first_author_orders_alphabetically(
+    seeded_db: sqlite3.Connection, client: TestClient
+) -> None:
+    # Seed three additional items with first authors Zenith, Alvarez, Mendez
+    # — expected order after ?sort=author is Alvarez, Mendez, Zenith.
+    def _seed(title: str, family: str) -> None:
+        cur = seeded_db.execute(
+            "INSERT INTO items(item_type, title) VALUES ('paper', ?)", (title,)
+        )
+        item_id = int(cur.lastrowid)  # type: ignore[arg-type]
+        key = f"{family.lower()},"
+        seeded_db.execute(
+            "INSERT OR IGNORE INTO authors(family_name, given_name, normalized_key) "
+            "VALUES (?, NULL, ?)",
+            (family, key),
+        )
+        aid = seeded_db.execute(
+            "SELECT id FROM authors WHERE normalized_key=? AND orcid IS NULL", (key,)
+        ).fetchone()["id"]
+        seeded_db.execute(
+            "INSERT INTO item_authors(item_id, author_id, position, role) "
+            "VALUES (?,?,0,'author')",
+            (item_id, aid),
+        )
+
+    _seed("Author-sort Z", "Zenith")
+    _seed("Author-sort A", "Alvarez")
+    _seed("Author-sort M", "Mendez")
+
+    body = client.get("/", params={"sort": "author"}).text
+    idx_a = body.find("Author-sort A")
+    idx_m = body.find("Author-sort M")
+    idx_z = body.find("Author-sort Z")
+    assert idx_a != -1 and idx_m != -1 and idx_z != -1
+    assert idx_a < idx_m < idx_z
 
 
 def test_home_invalid_sort_falls_back_to_default(client: TestClient) -> None:

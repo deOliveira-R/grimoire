@@ -54,6 +54,13 @@ class CollectionRow:
     item_count: int
 
 
+@dataclass
+class CollectionTreeNode:
+    collection: CollectionRow
+    children: list["CollectionTreeNode"] = field(default_factory=list)
+    descendants_count: int = 0
+
+
 _FEED_COLS = (
     "i.id, i.item_type, i.title, i.abstract, i.publication_year, "
     "i.venue, i.volume, i.issue, i.pages, "
@@ -269,6 +276,12 @@ _SORT_ORDERS: dict[str, str] = {
     "year": "i.publication_year DESC NULLS LAST, i.id DESC",
     "year_asc": "i.publication_year ASC NULLS LAST, i.id ASC",
     "title": "LOWER(i.title) ASC, i.id ASC",
+    "author": (
+        "(SELECT LOWER(a.family_name) FROM item_authors ia "
+        "JOIN authors a ON a.id = ia.author_id "
+        "WHERE ia.item_id = i.id AND ia.role = 'author' "
+        "ORDER BY ia.position LIMIT 1) ASC NULLS LAST, i.id ASC"
+    ),
 }
 DEFAULT_SORT = "added"
 
@@ -376,6 +389,42 @@ def list_collections(conn: sqlite3.Connection) -> list[CollectionRow]:
         )
         for r in rows
     ]
+
+
+def list_collections_tree(conn: sqlite3.Connection) -> list[CollectionTreeNode]:
+    """Build the collection forest from the flat list, rolling up descendant
+    counts so a parent reports ``item_count`` of itself plus all descendants.
+
+    Cycles in ``parent_id`` (shouldn't happen, but the schema doesn't forbid
+    them) are broken by skipping any node that would reattach under itself."""
+    flat = list_collections(conn)
+    by_id = {c.collection_id: CollectionTreeNode(c) for c in flat}
+    roots: list[CollectionTreeNode] = []
+    for c in flat:
+        node = by_id[c.collection_id]
+        parent = by_id.get(c.parent_id) if c.parent_id is not None else None
+        if parent is not None and parent is not node:
+            parent.children.append(node)
+        else:
+            roots.append(node)
+
+    def _roll_up(node: CollectionTreeNode) -> int:
+        node.descendants_count = node.collection.item_count + sum(
+            _roll_up(ch) for ch in node.children
+        )
+        return node.descendants_count
+
+    def _sort(node: CollectionTreeNode) -> None:
+        node.children.sort(key=lambda ch: ch.collection.name.lower())
+        for ch in node.children:
+            _sort(ch)
+
+    for r in roots:
+        _roll_up(r)
+    roots.sort(key=lambda n: n.collection.name.lower())
+    for r in roots:
+        _sort(r)
+    return roots
 
 
 def get_collection(conn: sqlite3.Connection, collection_id: int) -> CollectionRow | None:
