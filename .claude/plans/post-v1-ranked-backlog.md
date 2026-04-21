@@ -1,436 +1,112 @@
 # Next-session plan — post-v1 ranked backlog
 
-**As of 2026-04-20, HEAD = `e2b7342` (Add item_artifacts table + GROBID
-full-text artifact pipeline).** 265 tests passing, mypy strict clean.
-Phases 0–7 of the main plan are done; three manual oracles block v1.0 tag
-([#1](https://github.com/deOliveira-R/grimoire/issues/1),
-[#2](https://github.com/deOliveira-R/grimoire/issues/2),
-[#3](https://github.com/deOliveira-R/grimoire/issues/3)).
+**As of 2026-04-21, HEAD = `c55df0b` (Section-aware chunking from TEI
+artifacts, migration 004).** 301 tests passing, mypy strict clean.
+Phases 0–7 of the main implementation plan are done. Sessions 1 (UI
+quick wins) and 4 (section-aware chunking) of this backlog landed
+today — issues #4, #5, #8, #11, #17 closed.
 
-This doc is a handoff: a fresh Claude Code session should be able to pick
-any sub-session below and execute without rebuilding context from scratch.
-Read from top to bottom before writing any code.
+This doc is a handoff: a fresh Claude Code session should be able to
+pick any sub-session below and execute without rebuilding context from
+scratch. Read from top to bottom before writing any code.
 
-## What just happened (last session's summary)
+## What shipped today (2026-04-20 → 2026-04-21)
 
-- Shipped: README, web UI refinement, Zotero migration, Phases 5–7, and
-  a new `item_artifacts` table + GROBID full-text artifact pipeline
-  (commit `e2b7342`).
-- Filed 18 open issues on `deOliveira-R/grimoire`. Ranked by effort ×
-  impact with S / A / B / C / D tiers.
-- Opened: [#16](https://github.com/deOliveira-R/grimoire/issues/16)
-  citation graph, [#17](https://github.com/deOliveira-R/grimoire/issues/17)
-  section-aware chunking (needs schema approval),
-  [#18](https://github.com/deOliveira-R/grimoire/issues/18) OCR via
-  artifact kind.
-- Rodrigo flagged that he plans to retire Zotero in favor of grimoire,
-  so UI polish matters more than it otherwise would for a v1.
+- **Session 1** (`d56df40`): "UI quick wins" — closes #4, #5, #8, #11.
+  - Invariant 7 (paper+DOI ⇒ venue violation-rate) + invariant 10 (no
+    orphan chunks) test coverage.
+  - `?sort=author` on the home page; correlated subquery on
+    `item_authors`.
+  - `<mark>`-based search term highlighting with HTML-safe escaping.
+  - Nested collections tree in the sidebar (`<details>`/`<summary>`
+    with descendants_count rollup).
+- **Session 4** (`c55df0b`): "Section-aware chunking" — closes #17.
+  - Migration 004 adds `chunks.section`.
+  - `grimoire.section` classifier.
+  - `index._tei_section_chunks` prefers TEI when `grobid_tei` artifact
+    exists; falls back to per-page with `section=NULL`.
+  - MCP `search` gains `section` parameter; item ranking unaffected.
+- **OCR smoke test** on `1982NSE80-481.pdf` (56 pages, 1982 scan):
+  `ocrmypdf` produces a clean searchable PDF in 38 s wall / 170 s CPU.
+  Findings and a refined design (`ocr_pdf` artifact kind instead of
+  `ocr_text`) posted as a comment on #18 (not priority-reclassified —
+  that's Rodrigo's call).
 
 ## Decisions to confirm before coding (≤ 5 min)
 
-1. **Schema for [#17](https://github.com/deOliveira-R/grimoire/issues/17)
-   section-aware chunking.** Needs `ALTER TABLE chunks ADD COLUMN
-   section TEXT`. Only touches `chunks` (not `items`, `item_relations`,
-   or the embedding tables), so strictly *outside* the plan §10 rule-5
-   fence — but confirm anyway before writing migration 004.
-
-2. **GROBID docker availability.** [#16](https://github.com/deOliveira-R/grimoire/issues/16)
-   + [#17](https://github.com/deOliveira-R/grimoire/issues/17) both
-   depend on TEI artifacts existing for each item. Before Session 2,
-   confirm `docker compose up grobid` has been run once and
+1. **GROBID backfill status.** Sessions 2 and 4 (already shipped, but
+   its section-tagging only fires when TEI exists) depend on
+   `grobid_tei` artifacts existing for each item. Before picking up
+   Session 2, confirm `docker compose up grobid` has been run and
    `grimoire artifacts build --kind grobid_tei` has populated artifacts
-   for the current library (~15k papers, ~12–42 h wall time). If the
-   backfill hasn't happened, Session 2 starts with it.
+   for the current library (~15 k papers, ~12–42 h wall time).
 
-3. **Confirm the ranked order still feels right.** Rodrigo ranked S-tier
-   quick wins first ([#4](https://github.com/deOliveira-R/grimoire/issues/4),
-   [#11](https://github.com/deOliveira-R/grimoire/issues/11),
-   [#8](https://github.com/deOliveira-R/grimoire/issues/8),
-   [#5](https://github.com/deOliveira-R/grimoire/issues/5)), A-tier
-   strategic next. If daily use has changed his priorities, re-order at
-   the top.
+   Check:
+   ```bash
+   grimoire artifacts status                # expect ~15 k rows under grobid_tei
+   ```
+   If the backfill hasn't happened, Session 2 starts with kicking it
+   off and then waiting.
+
+2. **OCR priority (#18).** Rodrigo confirmed historical scans matter
+   strategically (IAEA reports, 1980s critical reviews on collision
+   probabilities, transport approximations) for ORPHEUS work. Volume
+   is medium-low, relevance density is high. Question for the next
+   session: do Sessions 5 (OCR) before or after Sessions 2 / 3? The
+   smoke-test comment on #18 has a design sketch and scope estimate.
+
+3. **Ranked order.** Sessions below are ordered by ~ readiness to
+   land, not strict priority. If Rodrigo's daily use has changed what
+   matters, re-order at the top.
 
 ## Parallel user-side work (no Claude involvement)
 
-These unblock v1.0 tag. Rodrigo does them; Claude writes up results
-into [`project_oracle_results.md`](../../../../.claude/projects/-Users-rodrigo-git-grimoire/memory/project_oracle_results.md)
+These unblock the v1.0 tag. Rodrigo does them; Claude writes up
+results into
+[`project_oracle_results.md`](../../../../.claude/projects/-Users-rodrigo-git-grimoire/memory/project_oracle_results.md)
 memory after.
 
 - **[#1](https://github.com/deOliveira-R/grimoire/issues/1)** — KOReader
   iPad OPDS roundtrip. 30 min.
+  - **Deferred indefinitely while Rodrigo is traveling without the
+    iPad.** Pick up on return.
 - **[#2](https://github.com/deOliveira-R/grimoire/issues/2)** — MCP
   research-question walkthrough via Claude Code. ~30 min once three real
-  OPAL questions are drafted.
+  OPAL / ORPHEUS research questions are drafted.
 - **[#3](https://github.com/deOliveira-R/grimoire/issues/3)** — 20-query
   recall@10 oracle. Needs Rodrigo to draft the queries file
-  (`tools/phase2_queries.jsonl` format: `{query, gold_item_ids,
-  notes}`); then Claude wires it into `tools/phase2_search_oracle.py`
-  and runs against the full corpus with real SPECTER2 + BGE-M3 loaded.
+  (`tools/phase2_queries.jsonl` format: `{query, gold_item_ids, notes}`);
+  then Claude wires it into `tools/phase2_search_oracle.py` and runs
+  against the full corpus with real SPECTER2 + BGE-M3 loaded.
 
 ---
 
-## Session 1 — S-tier quick wins (~1 working day)
+## Session 2 — Citation graph ([#16](https://github.com/deOliveira-R/grimoire/issues/16))
 
-Ship all four in one session. Zero schema changes, zero new deps. Run
-the full suite + mypy at each step; no "fix-later" residue.
+**Preconditions:** GROBID backfill complete (`grimoire artifacts status`
+shows non-trivial `grobid_tei` rows).
 
-### 1.1 — Invariant 7 + 10 tests ([#4](https://github.com/deOliveira-R/grimoire/issues/4))
-
-**Files:** new [`tests/test_invariants.py`](../../../tests/test_invariants.py).
-
-**What:**
-
-- **Invariant 7** (`paper + DOI ⇒ venue IS NOT NULL`): aspirational. Some
-  DOIs legitimately have no venue in Crossref. Write as a *flag* test —
-  compute the violation rate, fail only above a threshold (start with
-  5 %, tighten later):
-  ```python
-  def test_invariant_7_venue_backfill_rate(tmp_db):
-      # seed mixed rows, then query
-      violations = tmp_db.execute("""
-          SELECT COUNT(*) FROM items
-          WHERE item_type='paper' AND doi IS NOT NULL AND venue IS NULL
-      """).fetchone()[0]
-      total = tmp_db.execute("""
-          SELECT COUNT(*) FROM items
-          WHERE item_type='paper' AND doi IS NOT NULL
-      """).fetchone()[0]
-      assert total == 0 or violations / total <= 0.05
-  ```
-- **Invariant 10** (no orphan chunks): FK cascade enforces it at insert
-  time; this is belt-and-suspenders. Use `PRAGMA foreign_keys=OFF` to
-  force an orphan, re-enable, assert the query returns 0:
-  ```python
-  def test_invariant_10_no_orphan_chunks(tmp_db):
-      tmp_db.execute("PRAGMA foreign_keys=OFF")
-      tmp_db.execute(
-          "INSERT INTO chunks(item_id, chunk_index, text) VALUES (9999, 0, 'x')"
-      )
-      tmp_db.execute("PRAGMA foreign_keys=ON")
-      orphans = tmp_db.execute("""
-          SELECT COUNT(*) FROM chunks c
-          LEFT JOIN items i ON i.id = c.item_id
-          WHERE i.id IS NULL
-      """).fetchone()[0]
-      # Real libraries should stay at 0. Force-inserted orphan = 1 here so
-      # the test documents the shape of the check; real-DB assertion is 0.
-      assert orphans == 1
-  ```
-  Adjust: probably want a second test that runs against a clean fixture
-  and asserts `== 0`, plus the forced-orphan test above as a sanity
-  check of the query itself.
-
-**Acceptance:**
-
-- [ ] `pytest tests/test_invariants.py` passes.
-- [ ] Full suite still passes (266+ tests).
-- [ ] Mypy strict clean.
-
-**Effort estimate:** ~1 h.
-
-### 1.2 — Sort by first author ([#11](https://github.com/deOliveira-R/grimoire/issues/11))
-
-**Files:**
-- [`src/grimoire/web/queries.py`](../../../src/grimoire/web/queries.py)
-  (`_SORT_ORDERS` dict).
-- [`src/grimoire/web/ui.py`](../../../src/grimoire/web/ui.py)
-  (`_SORT_LABELS` dict).
-- [`tests/test_web_ui.py`](../../../tests/test_web_ui.py) (extend
-  `test_home_sort_*`).
-
-**What:** Add the `"author"` sort key. Correlated subquery in the
-ORDER BY — SQLite handles this at 15 k scale without issue but verify
-with an `EXPLAIN QUERY PLAN` once real data is loaded:
-
-```python
-_SORT_ORDERS = {
-    "added":    "i.added_at DESC, i.id DESC",
-    "year":     "i.publication_year DESC NULLS LAST, i.id DESC",
-    "year_asc": "i.publication_year ASC NULLS LAST, i.id ASC",
-    "title":    "LOWER(i.title) ASC, i.id ASC",
-    "author":   (
-        "(SELECT LOWER(a.family_name) FROM item_authors ia "
-        "JOIN authors a ON a.id = ia.author_id "
-        "WHERE ia.item_id = i.id AND ia.role = 'author' "
-        "ORDER BY ia.position LIMIT 1) ASC NULLS LAST, i.id ASC"
-    ),
-}
-```
-
-`_SORT_LABELS`: add `"author": "First author (A–Z)"`.
-
-**Gotcha:** items with no authors sort to the end (`NULLS LAST`).
-Items-with-editors-but-no-authors (edited volumes) sort nowhere useful;
-accept that, don't add editor fallback — edited volumes are a small
-slice.
-
-**Acceptance:**
-
-- [ ] `GET /?sort=author` returns items ordered by first author family
-      name.
-- [ ] Sort dropdown renders "First author (A–Z)" as a selectable option.
-- [ ] Test: seed items with first authors Z, A, M → order is A, M, Z
-      after `?sort=author`.
-- [ ] No regressions on other sort modes.
-
-**Effort estimate:** ~1 h.
-
-### 1.3 — Search term highlighting ([#8](https://github.com/deOliveira-R/grimoire/issues/8))
-
-**Files:**
-- New [`src/grimoire/web/jinja_filters.py`](../../../src/grimoire/web/jinja_filters.py).
-- [`src/grimoire/web/ui.py`](../../../src/grimoire/web/ui.py) register
-  filter on the `Jinja2Templates` env.
-- [`src/grimoire/web/templates/home.html`](../../../src/grimoire/web/templates/home.html)
-  wrap title + abstract.
-- [`src/grimoire/web/templates/base.html`](../../../src/grimoire/web/templates/base.html)
-  `<mark>` CSS.
-- [`tests/test_web_ui.py`](../../../tests/test_web_ui.py) new test.
-
-**What:**
-
-```python
-# jinja_filters.py
-import re
-from markupsafe import Markup, escape
-from grimoire.search.keyword import _TOKEN
-
-def highlight(text: str | None, query: str | None) -> Markup:
-    """Wrap query terms in <mark>. Case-insensitive. HTML-escapes the
-    input first, then injects <mark> around matches so the output is
-    safe to render with |safe."""
-    if not text or not query:
-        return Markup(escape(text or ""))
-    tokens = _TOKEN.findall(query)
-    if not tokens:
-        return Markup(escape(text))
-    pattern = re.compile(
-        "(" + "|".join(re.escape(t) for t in tokens) + ")",
-        re.IGNORECASE,
-    )
-    escaped = str(escape(text))
-    highlighted = pattern.sub(r"<mark>\1</mark>", escaped)
-    return Markup(highlighted)
-```
-
-Register in `ui.py`:
-```python
-from grimoire.web.jinja_filters import highlight
-templates.env.filters["highlight"] = highlight
-```
-
-Use in `home.html`:
-```jinja
-<h3><a href="/items/{{ item.item_id }}">{{ item.title|highlight(q) }}</a></h3>
-...
-<p class="abstract">{{ (item.abstract|truncate(280))|highlight(q) }}</p>
-```
-
-`<mark>` CSS in `base.html`:
-```css
-mark {
-  background: rgba(255, 215, 0, 0.35);
-  color: inherit;
-  padding: 0 1px;
-  border-radius: 2px;
-}
-@media (prefers-color-scheme: dark) {
-  mark { background: rgba(255, 193, 7, 0.35); }
-}
-```
-
-**Gotcha:** `truncate` before `highlight` means a match landing at the
-truncation boundary can be elided. Acceptable — users see the full text
-on the detail page. Truncate *after* highlight would chop inside
-`<mark>` tags (character-based truncate isn't HTML-aware).
-
-**Acceptance:**
-
-- [ ] `GET /?q=boron` response contains `<mark>boron</mark>` in item
-      titles/abstracts.
-- [ ] Query terms in *any* case match: `q=Boron` also highlights
-      `boron` and `BORON`.
-- [ ] HTML-escape order is correct — no XSS with payload like
-      `q=<script>`.
-- [ ] No highlight rendered when `q` is empty (regression check on the
-      default browse view).
-
-**Effort estimate:** ~2 h.
-
-### 1.4 — Nested collections tree ([#5](https://github.com/deOliveira-R/grimoire/issues/5))
-
-**Files:**
-- [`src/grimoire/web/queries.py`](../../../src/grimoire/web/queries.py)
-  new `list_collections_tree()` returning `[TreeNode(collection, children=[...])]`.
-- [`src/grimoire/web/ui.py`](../../../src/grimoire/web/ui.py) pass tree
-  instead of flat list.
-- [`src/grimoire/web/templates/home.html`](../../../src/grimoire/web/templates/home.html)
-  replace the flat `<ul>` with a recursive macro.
-- [`src/grimoire/web/templates/base.html`](../../../src/grimoire/web/templates/base.html)
-  indent + toggle CSS.
-- [`tests/test_web_ui.py`](../../../tests/test_web_ui.py) new test
-  covering parent-child render.
-
-**What:**
-
-1. **Queries:**
-
-```python
-@dataclass
-class CollectionTreeNode:
-    collection: CollectionRow
-    children: list["CollectionTreeNode"] = field(default_factory=list)
-    descendants_count: int = 0  # rolled-up item count incl. children
-
-def list_collections_tree(conn) -> list[CollectionTreeNode]:
-    flat = list_collections(conn)
-    by_id = {c.collection_id: CollectionTreeNode(c) for c in flat}
-    roots: list[CollectionTreeNode] = []
-    for c in flat:
-        node = by_id[c.collection_id]
-        if c.parent_id and c.parent_id in by_id:
-            by_id[c.parent_id].children.append(node)
-        else:
-            roots.append(node)
-    # Roll up counts bottom-up
-    def _roll_up(node: CollectionTreeNode) -> int:
-        node.descendants_count = node.collection.item_count + sum(
-            _roll_up(ch) for ch in node.children
-        )
-        return node.descendants_count
-    for r in roots:
-        _roll_up(r)
-    # Sort: alpha within each level
-    def _sort(node):
-        node.children.sort(key=lambda ch: ch.collection.name.lower())
-        for ch in node.children:
-            _sort(ch)
-    roots.sort(key=lambda n: n.collection.name.lower())
-    for r in roots:
-        _sort(r)
-    return roots
-```
-
-2. **Template** (recursive macro with `<details>` for toggle — no JS
-needed if we accept one caveat):
-
-```jinja
-{% macro render_tree(node, depth, active_id) %}
-  {%- set has_children = node.children|length > 0 -%}
-  {%- set is_self_active = active_id == node.collection.collection_id -%}
-  {%- set has_active_desc = has_descendant_active(node, active_id) -%}
-  <li class="col-node" style="padding-left: {{ depth * 0.8 }}rem;">
-    {% if has_children %}
-      <details {% if has_active_desc or is_self_active %}open{% endif %}>
-        <summary class="col-row">
-          <a href="{{ qs_with({'collection': node.collection.collection_id}) }}"
-             class="{% if is_self_active %}active{% endif %}"
-             title="{{ node.collection.name }}">{{ node.collection.name }}</a>
-          <span class="count">{{ node.descendants_count }}</span>
-        </summary>
-        <ul>
-          {% for child in node.children %}
-            {{ render_tree(child, depth + 1, active_id) }}
-          {% endfor %}
-        </ul>
-      </details>
-    {% else %}
-      <div class="col-row">
-        <a href="..." class="...">{{ node.collection.name }}</a>
-        <span class="count">{{ node.collection.item_count }}</span>
-      </div>
-    {% endif %}
-  </li>
-{% endmacro %}
-```
-
-Caveat: `<details>`/`<summary>` interaction with clickable `<a>`
-inside `<summary>` is weird on some browsers — clicking the link also
-toggles. Mitigation: style the `▸/▾` marker as a separate affordance
-(leave the default disclosure triangle) and instruct the user it toggles
-the tree; the link still filters. Rodrigo's primary browsers (Safari,
-Firefox) both handle this fine.
-
-3. **Register Jinja helper** for `has_descendant_active`:
-
-```python
-def has_descendant_active(node, active_id):
-    if active_id is None: return False
-    if node.collection.collection_id == active_id: return True
-    return any(has_descendant_active(ch, active_id) for ch in node.children)
-
-templates.env.globals["has_descendant_active"] = has_descendant_active
-```
-
-4. **CSS** — add to `base.html`:
-
-```css
-aside.sidebar .col-node { list-style: none; }
-aside.sidebar details > summary {
-  display: flex; align-items: baseline; gap: .25rem;
-  cursor: pointer; list-style: revert;
-}
-aside.sidebar details > summary::-webkit-details-marker {
-  display: none;  /* we use the ▸/▾ from the default CSS list-style */
-}
-aside.sidebar details ul { padding-left: 0; margin: 0; }
-```
-
-**Acceptance:**
-
-- [ ] Tree renders with proper indent depth.
-- [ ] Each parent shows rolled-up count including descendants.
-- [ ] Clicking a collection filters to it (URL picks up `?collection=N`).
-- [ ] The tree auto-expands the path to the active collection.
-- [ ] Test: seed nested collections (A > B > C with items in C), render,
-      assert all three names appear and C-filter URL works.
-- [ ] Zotero library with 40+ flat collections still renders fine (the
-      tree-building code gracefully handles a flat structure).
-
-**Effort estimate:** ~2–3 h.
-
-### 1.5 — Session 1 closeout
-
-After all four are green:
+### 2.1 — GROBID backfill (if not done yet)
 
 ```bash
-.venv/bin/python -m pytest --ignore=tests/test_heavy_embed.py -q    # expect 270+ passing
-.venv/bin/python -m mypy src/grimoire                               # expect clean
-```
-
-One commit for the four: `"UI quick wins: sort-by-author + search highlighting + nested collections + invariant coverage"`. Push to
-`origin/main`.
-
-Close issues [#4](https://github.com/deOliveira-R/grimoire/issues/4),
-[#5](https://github.com/deOliveira-R/grimoire/issues/5),
-[#8](https://github.com/deOliveira-R/grimoire/issues/8),
-[#11](https://github.com/deOliveira-R/grimoire/issues/11) via `gh issue close -c "landed in <sha>"`.
-
----
-
-## Session 2 — A-tier strategic features (~1 working day)
-
-### 2.1 — One-time GROBID backfill (preconditions for 2.2 and 4.x)
-
-Before writing code:
-
-```bash
-docker compose up -d grobid    # ~1.5 GB image pull first run
-curl http://localhost:8070/api/isalive   # expect 200
+docker compose up -d grobid           # ~1.5 GB image pull first run
+curl http://localhost:8070/api/isalive  # expect 200
 
 export GRIMOIRE_GROBID_URL=http://localhost:8070
-grimoire artifacts status                 # see how many items still need TEI
-grimoire artifacts build --kind grobid_tei -j 8    # parallel, resumable
+grimoire artifacts status             # see how many items still need TEI
+grimoire artifacts build --kind grobid_tei -j 8
 ```
 
 **Expected wall time:** 3–10 s per paper × 15 k ≈ 12–42 h. Kick off and
 come back tomorrow. Resumable via `items_missing_kind` — re-running
 picks up where it left off.
 
-Once complete: `grimoire artifacts status` should show `grobid_tei` with
-~15 k rows.
+Also: this auto-triggers the benefit of Session 4's section-aware
+chunking. After the backfill completes, run
+`grimoire index --force` to re-chunk with section tags on TEI-bearing
+items. Overnight for BGE-M3.
 
-### 2.2 — Citation graph ([#16](https://github.com/deOliveira-R/grimoire/issues/16))
+### 2.2 — Citation graph build
 
 **Files:**
 - New [`src/grimoire/citations.py`](../../../src/grimoire/citations.py)
@@ -530,8 +206,6 @@ def citations_build(
     limit: int | None = typer.Option(None, "--limit"),
     force: bool = typer.Option(False, "--force"),
 ) -> None:
-    """Walk grobid_tei artifacts, DOI-match references → items,
-    populate cites/cited_by edges."""
     from grimoire.citations import build
 
     conn = connect()
@@ -587,9 +261,9 @@ runs async).
 Commit: `"Citation graph from TEI references"`. Push. Close
 [#16](https://github.com/deOliveira-R/grimoire/issues/16).
 
-Ask Claude Code (via MCP) a trace-forward question to smoke-test end-to-end:
-*"What papers in my library cite [some known paper]?"* — expect a
-real answer backed by `list_related`.
+Ask Claude Code (via MCP) a trace-forward question to smoke-test
+end-to-end: *"What papers in my library cite [some known paper]?"* —
+expect a real answer backed by `list_related`.
 
 ---
 
@@ -600,6 +274,9 @@ nav and [#9](https://github.com/deOliveira-R/grimoire/issues/9)
 split-pane HTMX together — they compound. Keyboard j/k without the
 detail pane is meh; the detail pane without keyboard nav feels
 mouse-only.
+
+**Precondition:** Rodrigo available in a browser for the live-smoke
+step (30 min feedback loop). Not GROBID-dependent.
 
 ### 3.1 — Template split for partial rendering
 
@@ -728,169 +405,218 @@ Close [#7](https://github.com/deOliveira-R/grimoire/issues/7) and
 
 ---
 
-## Session 4 — Section-aware chunking ([#17](https://github.com/deOliveira-R/grimoire/issues/17))
+## Session 5 — OCR pipeline ([#18](https://github.com/deOliveira-R/grimoire/issues/18)) — ~½ day
+
+**Context from today's smoke test** (see
+[#18 comment](https://github.com/deOliveira-R/grimoire/issues/18#issuecomment-4291432046)):
+
+- `ocrmypdf` 17.4.1 + Tesseract handled a 1982 NSE scan cleanly: 56
+  pages, 38 s wall, 235 k extractable chars, cover metadata (title,
+  authors, venue, year) all machine-readable.
+- Greek letters + math glyphs mangled; prose and DOIs fine. Good enough
+  for GROBID's reference extraction.
+- Install gotcha: fresh `brew install ocrmypdf` with recently-upgraded
+  x265 needs `brew reinstall libheif`.
 
 **Preconditions:**
-- Session 1 + 2 landed (S-tier quick wins + citation graph).
-- GROBID backfill complete.
-- **Schema approval obtained** (see "Decisions to confirm" above).
+- Rodrigo confirmed the `ocr_pdf` vs `ocr_text` design question (the
+  comment proposes storing the searchable PDF, not plain text).
+- Rodrigo approves migration 005 adding `'ocr_pdf'` to the
+  `item_artifacts.kind` CHECK constraint. It's outside the plan §10
+  rule-5 fence (touches `item_artifacts` only, not `items` /
+  `item_relations` / embedding tables).
 
-### 4.1 — Migration 004
+### 5.1 — Migration 005
 
-New [`migrations/004_chunks_section.sql`](../../../migrations/004_chunks_section.sql):
+New [`migrations/005_ocr_artifact_kind.sql`](../../../migrations/005_ocr_artifact_kind.sql):
 
 ```sql
-ALTER TABLE chunks ADD COLUMN section TEXT;
+-- Add 'ocr_pdf' to the item_artifacts.kind CHECK constraint.
+-- SQLite doesn't support modifying a CHECK in place; rebuild the table.
+
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE item_artifacts_new (
+    item_id       INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL CHECK(kind IN (
+                      'primary',
+                      'grobid_tei',
+                      'ocr_pdf',
+                      'ocr_text',
+                      'extracted_md'
+                  )),
+    content_hash  TEXT NOT NULL,
+    source        TEXT,
+    generated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    size_bytes    INTEGER,
+    PRIMARY KEY(item_id, kind)
+);
+
+INSERT INTO item_artifacts_new SELECT * FROM item_artifacts;
+DROP TABLE item_artifacts;
+ALTER TABLE item_artifacts_new RENAME TO item_artifacts;
+
+PRAGMA foreign_keys = ON;
 ```
 
-Nothing else — old chunks get `NULL`, which MCP search treats as
-"unknown section, don't filter out".
+Keep `ocr_text` in the allowed kinds (cheap) for anyone who later
+wants a plain-text companion; nothing writes to it yet.
 
-### 4.2 — Section classifier
-
-New [`src/grimoire/section.py`](../../../src/grimoire/section.py):
+Also update the `Kind` Literal in
+[`src/grimoire/storage/artifacts.py`](../../../src/grimoire/storage/artifacts.py):
 
 ```python
-_HEADING_MAP: list[tuple[str, str]] = [
-    ("introduction", "introduction"),
-    ("background",   "introduction"),
-    ("related work", "introduction"),
-    ("method",       "methods"),
-    ("methodolog",   "methods"),
-    ("experimental", "methods"),
-    ("materials",    "methods"),
-    ("result",       "results"),
-    ("finding",      "results"),
-    ("discussion",   "discussion"),
-    ("conclusion",   "conclusion"),
-    ("summary",      "conclusion"),
-]
-
-def classify(heading: str | None) -> str:
-    if not heading:
-        return "other"
-    h = heading.lower().strip()
-    # Strip leading numbering like "1.", "2.3", "III."
-    import re
-    h = re.sub(r"^([IVX]+\.?\s+|\d+(\.\d+)*\.?\s+)", "", h)
-    for needle, section in _HEADING_MAP:
-        if needle in h:
-            return section
-    return "other"
+Kind = Literal["primary", "grobid_tei", "ocr_pdf", "ocr_text", "extracted_md"]
 ```
 
-Tests: headings with numbering ("2. Methods"), compound headings
-("Materials and Methods"), foreign-language ("Méthodes" → "other", fine).
+### 5.2 — `grimoire.ocr` subprocess wrapper
 
-### 4.3 — Index flow rework
-
-In [`index.py::index_item`](../../../src/grimoire/index.py):
-
-Current flow builds `pages: list[tuple[int, str]]` and calls
-`chunk_pages(pages)`. Rework:
+New [`src/grimoire/ocr.py`](../../../src/grimoire/ocr.py):
 
 ```python
-# Try TEI-backed section chunking first.
-tei_bytes = artifacts.read(conn, item_id, "grobid_tei")
-if tei_bytes is not None:
-    struct = tei_parser.parse_structure(tei_bytes)
-    if struct is not None and struct["sections"]:
-        chunks = _chunk_tei_sections(struct["sections"])
-        # Insert with section tag.
-        ...
-        return
-# Fall back to per-page chunking (no section tag).
-pages = _extract_pages(row["content_hash"])
-chunks = chunk_pages(pages)
-# Insert with section=None.
-...
-```
+"""Run ocrmypdf on a PDF and return the resulting searchable-PDF bytes.
 
-Implementation of `_chunk_tei_sections`:
+Uses a subprocess so ocrmypdf's Python API pulling a full image stack is
+not required at import time. Caller handles CAS writes and DB rows."""
 
-```python
-def _chunk_tei_sections(sections: list[dict]) -> list[tuple[Chunk, str]]:
-    """Chunk within each section independently; tag each chunk with the
-    classified section type."""
-    out: list[tuple[Chunk, str]] = []
-    for sec in sections:
-        section_type = classify(sec["heading"])
-        # Build a fake [(page=1, text)] input for the existing chunker —
-        # page numbers are meaningless for TEI-sourced text, but our DB
-        # accepts NULL on chunks.page so we use None directly via a small
-        # variant of chunk_pages.
-        single_page = [(None, sec["text"])]   # may need chunk.py tweak to accept None
-        for c in chunk_pages(single_page):
-            out.append((c, section_type))
-    return out
-```
+from __future__ import annotations
 
-Adjust `chunk.chunk_pages` to accept `page: int | None` — minor typing
-change, no behavior change. Fine to land with this work.
+import logging
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
 
-Update the insert in `_insert_chunks_with_embeddings`:
+log = logging.getLogger(__name__)
 
-```python
-conn.execute(
-    "INSERT INTO chunks(item_id, chunk_index, page, text, section) VALUES (?,?,?,?,?)",
-    (item_id, chunk.chunk_index, chunk.page, chunk.text, section_type),
-)
-```
 
-### 4.4 — MCP search `section` filter
+class OCRUnavailable(RuntimeError):
+    """Raised when ocrmypdf is not on PATH."""
 
-In [`mcp/tools.py::search`](../../../src/grimoire/mcp/tools.py):
 
-```python
-def search(
-    conn,
-    query,
-    mode="hybrid",
-    item_types=None,
-    section: str | None = None,    # new
-    limit=20,
+def have_ocr() -> bool:
+    return shutil.which("ocrmypdf") is not None
+
+
+def run(
+    pdf_bytes: bytes,
     *,
-    item_embedder=None,
-    chunk_embedder=None,
-):
-    ...
-    # When `section` is set, filter chunk-search results to chunks tagged
-    # with that section before hydrating. Item-level SPECTER2 results are
-    # unaffected.
+    force: bool = False,
+    language: str = "eng",
+    timeout_s: float = 1800,
+) -> bytes:
+    """OCR the PDF, return the resulting searchable-PDF bytes.
+
+    When ``force`` is False (default), ocrmypdf skips pages that already
+    have a text layer; pass True to re-OCR."""
+    if not have_ocr():
+        raise OCRUnavailable("ocrmypdf not found on PATH. Install with: brew install ocrmypdf")
+
+    with tempfile.TemporaryDirectory() as td:
+        in_path = Path(td) / "in.pdf"
+        out_path = Path(td) / "out.pdf"
+        in_path.write_bytes(pdf_bytes)
+
+        cmd = ["ocrmypdf", "--quiet", "--language", language]
+        if force:
+            cmd.append("--force-ocr")
+        else:
+            cmd.append("--skip-text")
+        cmd.extend([str(in_path), str(out_path)])
+
+        try:
+            subprocess.run(cmd, check=True, timeout=timeout_s, capture_output=True)
+        except subprocess.CalledProcessError as exc:
+            log.warning("ocrmypdf failed (rc=%s): %s", exc.returncode, exc.stderr.decode())
+            raise
+        except subprocess.TimeoutExpired:
+            log.warning("ocrmypdf timed out after %ss", timeout_s)
+            raise
+        return out_path.read_bytes()
 ```
 
-Wire through the FastMCP tool wrapper in `server.py`.
+### 5.3 — Hook into `artifacts build`
 
-### 4.5 — Tests
+[`src/grimoire/cli.py`](../../../src/grimoire/cli.py) already has the
+`artifacts build --kind grobid_tei` subcommand. Extend it to accept
+`--kind ocr_pdf`:
 
-- `test_section.py` — classifier covers each mapped keyword and the
-  numbered-prefix strip.
-- `test_index_section_tagging.py` — synthetic TEI + seeded item →
-  `grimoire index` (with stub embedders) → assert `chunks.section`
-  correctly populated per chunk.
-- `test_mcp_search_section_filter.py` — store chunks with different
-  sections, call search with `section='methods'`, assert only those
-  chunks surface in snippets.
+- Use `artifacts.items_missing_kind(conn, 'ocr_pdf')` to get the work
+  list.
+- For each item, read the `primary` artifact, feed to `ocr.run`, store
+  the result as `ocr_pdf`.
+- **Gate: only OCR when the primary PDF has no text layer.** Use a
+  helper:
+  ```python
+  def primary_has_text(conn, item_id) -> bool:
+      p = artifacts.path_for(conn, item_id, 'primary')
+      if p is None: return False
+      import pymupdf
+      with pymupdf.open(p) as doc:
+          return any(page.get_text().strip() for page in doc)
+  ```
+  Skip items where it returns True.
 
-### 4.6 — Re-index
+Keep the `-j N` parallelism pattern from the grobid_tei subcommand.
+Tesseract is CPU-bound; reasonable default `j=os.cpu_count()//2`.
 
-After landing, the user runs:
+### 5.4 — Prefer OCR'd PDF downstream
+
+Two downstream sites should prefer the `ocr_pdf` artifact when present:
+
+1. **`index._extract_pages`**: replace `CAS(settings.files_root).path_for_hash(content_hash)`
+   with a lookup that prefers the `ocr_pdf` artifact when the item has
+   one. This means chunks for OCR'd items have real text (currently
+   zero chunks).
+2. **GROBID build** (`artifacts build --kind grobid_tei`): when fetching
+   the PDF to POST, prefer `ocr_pdf` over `primary` so Tesseract's
+   layer feeds GROBID.
+
+### 5.5 — Optional extra + pyproject
+
+In [`pyproject.toml`](../../../pyproject.toml):
+
+```toml
+[project.optional-dependencies]
+ocr = []    # ocrmypdf is a system binary, not a Python dep; the extra
+            # exists for marker/future ocrmypdf-python-api use. Document
+            # in README that the binary must be installed separately.
+```
+
+Add an install note in [README.md](../../../README.md) about
+`brew install ocrmypdf` (macOS) / `apt install ocrmypdf` (Debian) and
+the `brew reinstall libheif` workaround if x265 was recently upgraded.
+
+### 5.6 — Tests
+
+- `test_ocr.py`:
+  - `test_have_ocr` — asserts `shutil.which` is patched correctly.
+  - `test_run_raises_without_ocrmypdf` — monkeypatch `have_ocr()` False.
+  - `test_run_with_mock_subprocess` — monkeypatch `subprocess.run` to
+    drop a fake PDF in the output path; assert bytes round-trip.
+- `test_artifacts_build_ocr.py`:
+  - Seed an item with an image-only PDF as `primary`.
+  - Stub `ocr.run` to return a known bytes blob.
+  - Call the CLI; assert `ocr_pdf` artifact row exists.
+  - Assert already-text-layer items are skipped.
+- Optional live smoke (not in CI):
+  ```bash
+  grimoire artifacts build --kind ocr_pdf --limit 1
+  ```
+  on a known scanned item, then `grimoire index --force <item_id>` and
+  verify chunks were produced.
+
+### 5.7 — Session 5 closeout
+
+Commit: `"OCR pipeline: ocr_pdf artifact kind + CLI wiring (migration 005)"`.
+Push. Close [#18](https://github.com/deOliveira-R/grimoire/issues/18).
+
+User-side follow-up after merge:
 ```bash
-grimoire index --force
+grimoire artifacts build --kind ocr_pdf -j 4    # bounded by CPU
+grimoire artifacts build --kind grobid_tei      # picks up OCR'd PDFs
+grimoire index --force                          # re-chunks with section tags
 ```
-to re-chunk the full library with the new section tags. One overnight
-run for the BGE-M3 portion.
-
-### 4.7 — Session 4 closeout
-
-Commit: `"Section-aware chunking from TEI artifacts (migration 004)"`.
-Push. Close [#17](https://github.com/deOliveira-R/grimoire/issues/17).
-
-Nice-to-have regression check: re-run
-[`tools/phase2_search_oracle.py`](../../../tools/phase2_search_oracle.py)
-with the new chunking, compare recall@10 on method-specific queries
-against the pre-landing baseline. Update
-[`project_oracle_results.md`](../../../../.claude/projects/-Users-rodrigo-git-grimoire/memory/project_oracle_results.md).
 
 ---
 
@@ -909,44 +635,37 @@ Not detailed here — deal with these as they bubble up during daily use:
 - **[#15](https://github.com/deOliveira-R/grimoire/issues/15)** Tier-4
   review queue — useful during/after a full 15 k migration; defer
   until then.
-- **[#18](https://github.com/deOliveira-R/grimoire/issues/18)** OCR via
-  artifact kind. Measure scan prevalence first — if <5 % of the library
-  is scanned, deprioritize.
 - **[#12](https://github.com/deOliveira-R/grimoire/issues/12)** Upload
   + URL-submit web forms. User explicitly deferred; revisit if
   non-CLI users need to ingest.
 - **[#13](https://github.com/deOliveira-R/grimoire/issues/13)** v2
   umbrella — CSL styles, annotations, tag hierarchies, author
-  disambiguation, bookmarklet. Revisit in v1.1+ when priorities clarify.
+  disambiguation, bookmarklet. Revisit in v1.1+ when priorities
+  clarify.
 
 ---
 
 ## Risks and watch-items across sessions
 
-- **Prompt cache cost.** A plan this detailed fits in one session easily
-  — don't bother breaking up for cache reasons.
-- **Schema churn.** Only migration 004 (Session 4) touches `chunks`.
-  Everything else is additive on existing schema.
-- **GROBID backfill duration.** Sessions 2 and 4 depend on it. If it's
-  not done when Session 2 starts, fall back to doing Session 1 now + a
-  second sub-session of Session 2 later after the backfill completes.
-- **Full-suite latency.** Currently ~3 s. Stays that way for Session 1.
-  Session 4's migration 004 + re-chunking test fixtures will add maybe
-  0.5 s. Still fine.
+- **GROBID backfill duration.** Sessions 2 and 5 (if OCR'd PDFs go
+  through GROBID) depend on it. If it's not done when Session 2 starts,
+  fall back to kicking it off and running a different session in the
+  interim.
+- **Schema churn.** Migration 005 (Session 5) touches `item_artifacts`
+  via table rebuild — a more invasive migration than the
+  column-addition in 004. Be careful if the user has historical data.
+  Test migration 005 against a copy of the real DB before running on
+  the live one.
+- **Full-suite latency.** Currently ~3.4 s for 301 tests. Sessions 2
+  and 5 will add maybe 1 s. Still fine.
 - **Mypy strict**: all new code must stay in. No `# type: ignore`
   without a comment explaining why.
+- **Prompt cache cost.** This plan fits in one session easily — don't
+  break it up for cache reasons.
 
 ---
 
 ## Suggested session structure
-
-### Session 1 (1 day, pure Claude work)
-- 10 min — read this doc top-to-bottom.
-- 1 h   — #4 invariant tests.
-- 1 h   — #11 sort by author.
-- 2 h   — #8 search highlighting.
-- 3 h   — #5 nested collections.
-- 30 min — full-suite run, mypy, commit, push, close issues.
 
 ### Session 2 (same day the GROBID backfill finishes)
 - 10 min — confirm backfill complete via `grimoire artifacts status`.
@@ -954,21 +673,22 @@ Not detailed here — deal with these as they bubble up during daily use:
 - 30 min — smoke via MCP.
 - 20 min — commit, push, close.
 
-### Session 3 (1 day, pure Claude work)
+### Session 3 (1 day, needs Rodrigo available in a browser)
 - 30 min — template fragment split for partial rendering.
 - 30 min — htmx + layout changes.
 - 2 h   — keyboard nav.
-- 1 h   — live browser smoke (user must be available for feedback).
+- 1 h   — live browser smoke (Rodrigo must be present for feedback).
 - 30 min — commit, push, close.
 
-### Session 4 (1 day, needs schema approval first)
-- 10 min — confirm schema approval.
-- 30 min — migration 004.
-- 1 h   — section classifier + tests.
-- 2 h   — index flow rework + tests.
-- 1 h   — MCP search `section` filter + test.
-- Overnight — `grimoire index --force` re-chunk.
-- Next day, 30 min — Phase 2 oracle rerun for regression check.
+### Session 5 (½ day, needs migration 005 approval first)
+- 10 min — confirm approval.
+- 30 min — migration 005 + artifacts Kind literal update.
+- 1 h   — `grimoire.ocr` module + unit tests.
+- 1 h   — `artifacts build --kind ocr_pdf` CLI + `primary_has_text`
+  gate + test with stubbed subprocess.
+- 30 min — downstream hooks: `_extract_pages` + GROBID build prefer
+  `ocr_pdf`.
+- 30 min — README install note, pyproject extra, commit, push, close.
 
-**Total ≈ 4 focused working days** from "post-v1 tag" to "everything
-important is landed."
+**Total remaining ≈ 2.5 focused working days** from post-today state
+to "everything important is landed."
