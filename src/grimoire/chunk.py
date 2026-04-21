@@ -8,6 +8,7 @@ never cuts mid-sentence."""
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 # Naive but adequate for research-paper prose. Accepts ., !, ? followed by
@@ -23,7 +24,7 @@ class Chunk:
 
 
 def chunk_pages(
-    pages: list[tuple[int, str]],
+    pages: Sequence[tuple[int | None, str]],
     target_words: int = 400,
     overlap_words: int = 40,
 ) -> list[Chunk]:
@@ -39,7 +40,7 @@ def chunk_pages(
     # Build (page, [words]) per sentence. Sentences longer than target_words
     # (common in stripped-PDF blobs without sentence punctuation) get sliced
     # so the packer never gets a "sentence" it can't fit.
-    sentences: list[tuple[int, list[str]]] = []
+    sentences: list[tuple[int | None, list[str]]] = []
     for page, text in pages:
         if not text:
             continue

@@ -32,6 +32,7 @@ def search(
     query: str,
     mode: SearchMode = "hybrid",
     item_types: list[str] | None = None,
+    section: str | None = None,
     limit: int = 20,
     *,
     item_embedder: Embedder | None = None,
@@ -44,6 +45,7 @@ def search(
         limit=limit * (2 if item_types else 1),
         item_embedder=item_embedder,
         chunk_embedder=chunk_embedder,
+        section=section,
     )
 
     allowed = set(item_types) if item_types else None

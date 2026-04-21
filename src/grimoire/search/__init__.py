@@ -25,6 +25,7 @@ def search_items(
     limit: int = 20,
     item_embedder: Embedder | None = None,
     chunk_embedder: Embedder | None = None,
+    section: str | None = None,
 ) -> list[SearchHit]:
     if not query.strip():
         return []
@@ -51,7 +52,7 @@ def search_items(
     else:  # pragma: no cover - type-checker catches this already
         raise ValueError(f"unknown mode: {mode}")
 
-    return _hydrate(conn, query, ranked_ids, mode, chunk_embedder)
+    return _hydrate(conn, query, ranked_ids, mode, chunk_embedder, section)
 
 
 def _query_for_item_embed(query: str) -> str:
@@ -67,6 +68,7 @@ def _hydrate(
     item_ids: list[int],
     mode: SearchMode,
     chunk_embedder: Embedder | None,
+    section: str | None = None,
 ) -> list[SearchHit]:
     if not item_ids:
         return []
@@ -78,7 +80,7 @@ def _hydrate(
     ).fetchall()
     by_id = {row["id"]: row for row in rows}
 
-    snippets = _best_snippets(conn, query, item_ids, mode, chunk_embedder)
+    snippets = _best_snippets(conn, query, item_ids, mode, chunk_embedder, section)
 
     out = []
     for rank, item_id in enumerate(item_ids, start=1):
@@ -104,6 +106,7 @@ def _best_snippets(
     item_ids: list[int],
     mode: SearchMode,
     chunk_embedder: Embedder | None,
+    section: str | None = None,
 ) -> dict[int, Snippet]:
     """For each item, return the single best-matching chunk. For keyword mode
     we run FTS5 over chunks_fts; for semantic/hybrid we use the chunk embedder
@@ -113,17 +116,23 @@ def _best_snippets(
 
     if mode == "semantic" and chunk_embedder is not None:
         q_vec = l2_normalize(chunk_embedder.encode([query]))[0]
-        hits = semantic.search_chunks_by_embedding(conn, q_vec, limit=len(item_ids) * 5)
+        hits = semantic.search_chunks_by_embedding(
+            conn, q_vec, limit=len(item_ids) * 5, section=section
+        )
         return _first_per_item(hits, item_ids)
 
     if mode == "hybrid" and chunk_embedder is not None:
         q_vec = l2_normalize(chunk_embedder.encode([query]))[0]
-        sem_hits = semantic.search_chunks_by_embedding(conn, q_vec, limit=len(item_ids) * 5)
+        sem_hits = semantic.search_chunks_by_embedding(
+            conn, q_vec, limit=len(item_ids) * 5, section=section
+        )
         if sem_hits:
             return _first_per_item(sem_hits, item_ids)
 
     # Fallback: FTS5 over chunks.
-    kw_hits = keyword.search_chunks(conn, query, limit=len(item_ids) * 5)
+    kw_hits = keyword.search_chunks(
+        conn, query, limit=len(item_ids) * 5, section=section
+    )
     return _first_per_item(kw_hits, item_ids)
 
 

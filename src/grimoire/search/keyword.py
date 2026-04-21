@@ -37,19 +37,31 @@ def search_items(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[
     return [ItemHit(item_id=int(r["item_id"]), score=float(r["score"])) for r in rows]
 
 
-def search_chunks(conn: sqlite3.Connection, query: str, limit: int = 20) -> list[Snippet]:
+def search_chunks(
+    conn: sqlite3.Connection,
+    query: str,
+    limit: int = 20,
+    *,
+    section: str | None = None,
+) -> list[Snippet]:
     fts_query = _build_query(query)
     if not fts_query:
         return []
+    where = "chunks_fts MATCH ?"
+    params: list[object] = [fts_query]
+    if section is not None:
+        where += " AND c.section = ?"
+        params.append(section)
+    params.append(limit)
     rows = conn.execute(
-        """SELECT c.id AS chunk_id, c.item_id, c.page, c.text,
-                  bm25(chunks_fts) AS score
-           FROM chunks_fts
-           JOIN chunks c ON c.id = chunks_fts.rowid
-           WHERE chunks_fts MATCH ?
-           ORDER BY score
-           LIMIT ?""",
-        (fts_query, limit),
+        f"""SELECT c.id AS chunk_id, c.item_id, c.page, c.text,
+                   bm25(chunks_fts) AS score
+            FROM chunks_fts
+            JOIN chunks c ON c.id = chunks_fts.rowid
+            WHERE {where}
+            ORDER BY score
+            LIMIT ?""",
+        tuple(params),
     ).fetchall()
     return [
         Snippet(

@@ -21,6 +21,7 @@ from grimoire.chunk import Chunk, chunk_pages
 from grimoire.config import settings
 from grimoire.embed.base import Embedder, l2_normalize, serialize_float32
 from grimoire.embed.specter2 import format_item_text
+from grimoire.section import classify as classify_section
 from grimoire.storage.cas import CAS
 
 log = logging.getLogger(__name__)
@@ -88,12 +89,21 @@ def index_item(
         (item_id, serialize_float32(item_vec)),
     )
 
-    # Chunk embeddings — only meaningful for items with a body.
+    # Chunk embeddings — only meaningful for items with a body. Prefer
+    # TEI-backed section chunking when a ``grobid_tei`` artifact exists;
+    # fall back to per-page chunking (section=NULL) otherwise.
     n_chunks = 0
-    if pages:
+    tagged = _tei_section_chunks(conn, item_id) if row["item_type"] != "chapter" else []
+    if tagged:
+        n_chunks = _insert_chunks_with_embeddings(
+            conn, item_id, tagged, chunk_embedder
+        )
+    elif pages:
         chunks = chunk_pages(pages)
         if chunks:
-            n_chunks = _insert_chunks_with_embeddings(conn, item_id, chunks, chunk_embedder)
+            n_chunks = _insert_chunks_with_embeddings(
+                conn, item_id, [(c, None) for c in chunks], chunk_embedder
+            )
 
     return IndexResult(item_id=item_id, status="indexed", chunks=n_chunks)
 
@@ -174,17 +184,18 @@ def _pdf_pages(path: Path) -> list[tuple[int, str]]:
 def _insert_chunks_with_embeddings(
     conn: sqlite3.Connection,
     item_id: int,
-    chunks: list[Chunk],
+    chunks: list[tuple[Chunk, str | None]],
     chunk_embedder: Embedder,
 ) -> int:
-    texts = [c.text for c in chunks]
+    texts = [c.text for c, _ in chunks]
     vecs = l2_normalize(chunk_embedder.encode(texts))
     _dim_check(vecs, chunk_embedder.dim, "chunk")
 
-    for chunk, vec in zip(chunks, vecs, strict=True):
+    for (chunk, section), vec in zip(chunks, vecs, strict=True):
         cur = conn.execute(
-            "INSERT INTO chunks(item_id, chunk_index, page, text) VALUES (?, ?, ?, ?)",
-            (item_id, chunk.chunk_index, chunk.page, chunk.text),
+            "INSERT INTO chunks(item_id, chunk_index, page, text, section) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (item_id, chunk.chunk_index, chunk.page, chunk.text, section),
         )
         chunk_id = int(cur.lastrowid)  # type: ignore[arg-type]
         conn.execute(
@@ -192,6 +203,44 @@ def _insert_chunks_with_embeddings(
             (chunk_id, serialize_float32(vec)),
         )
     return len(chunks)
+
+
+def _tei_section_chunks(
+    conn: sqlite3.Connection, item_id: int
+) -> list[tuple[Chunk, str | None]]:
+    """Return ``[(chunk, section_type)]`` built from the item's TEI sections.
+
+    Returns an empty list when no ``grobid_tei`` artifact exists, or when it
+    parses into zero sections — in that case the caller falls back to
+    per-page chunking."""
+    from grimoire.extract import tei as tei_parser
+    from grimoire.storage import artifacts
+
+    data = artifacts.read(conn, item_id, "grobid_tei")
+    if data is None:
+        return []
+    struct = tei_parser.parse_structure(data)
+    if struct is None or not struct["sections"]:
+        return []
+    out: list[tuple[Chunk, str | None]] = []
+    running_idx = 0
+    for sec in struct["sections"]:
+        text = (sec.get("text") or "").strip()
+        if not text:
+            continue
+        section_type = classify_section(sec.get("heading"))
+        # Each section is its own chunking context. ``Chunk.page`` stays None
+        # since TEI doesn't preserve source page numbers; chunk_pages accepts
+        # ``page=None`` — chunks carry it through.
+        for c in chunk_pages([(None, text)]):
+            out.append(
+                (
+                    Chunk(page=None, chunk_index=running_idx, text=c.text),
+                    section_type,
+                )
+            )
+            running_idx += 1
+    return out
 
 
 def _dim_check(arr: object, expected: int, label: str) -> None:

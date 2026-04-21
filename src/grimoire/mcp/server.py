@@ -63,19 +63,36 @@ def _chunk_embedder() -> Any:
 # ---------- tools ---------------------------------------------------------
 
 
+_SECTION_VALUES = {
+    "introduction",
+    "methods",
+    "results",
+    "discussion",
+    "conclusion",
+    "other",
+}
+
+
 @mcp.tool()
 def search(
     query: str,
     mode: str = "hybrid",
     item_types: list[str] | None = None,
+    section: str | None = None,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Search the library. Modes: 'keyword' (FTS5), 'semantic' (SPECTER2 KNN),
     'hybrid' (RRF fusion — best default). ``item_types`` filters to e.g.
-    ['paper', 'book', 'thesis']. Returns ranked items, each with a best-matching
-    chunk snippet and page number when available."""
+    ['paper', 'book', 'thesis']. ``section`` filters the returned *snippets*
+    to one of 'introduction', 'methods', 'results', 'discussion',
+    'conclusion', 'other' — item ranking is unaffected. Returns ranked items,
+    each with a best-matching chunk snippet and page number when available."""
     if mode not in {"hybrid", "keyword", "semantic"}:
         raise ValueError(f"mode must be hybrid|keyword|semantic, got {mode!r}")
+    if section is not None and section not in _SECTION_VALUES:
+        raise ValueError(
+            f"section must be one of {sorted(_SECTION_VALUES)}, got {section!r}"
+        )
     item_emb = _item_embedder() if mode in {"hybrid", "semantic"} else None
     chunk_emb = _chunk_embedder() if mode in {"hybrid", "semantic"} else None
     with _db() as conn:
@@ -84,6 +101,7 @@ def search(
             query,
             mode=mode,  # type: ignore[arg-type]
             item_types=item_types,
+            section=section,
             limit=limit,
             item_embedder=item_emb,
             chunk_embedder=chunk_emb,
