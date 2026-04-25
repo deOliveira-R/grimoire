@@ -126,6 +126,36 @@ def test_ingest_dedup_by_doi(
     files = [p for p in cas.root.rglob("*") if p.is_file()]
     assert len(files) == 2
 
+    # Audit trail: every tier-1 merge records a merge_history row pointing at
+    # the surviving target with a non-empty reason.
+    rows = tmp_db.execute(
+        "SELECT target_id, reason FROM merge_history"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["target_id"] == first.item_id
+    assert rows[0]["reason"] and "match" in rows[0]["reason"]
+
+
+def test_ingest_writes_primary_artifact(
+    tmp_db: sqlite3.Connection, pdf_with_doi: Path, stub_crossref: None
+) -> None:
+    """Every ingested file lands as a 'primary' artifact row pointing at the
+    item's content_hash. Downstream artifact pipelines (GROBID, OCR) gate on
+    this row existing."""
+    result = ingest.ingest_file(tmp_db, pdf_with_doi)
+    assert result.item_id is not None
+    row = tmp_db.execute(
+        "SELECT content_hash, source FROM item_artifacts "
+        "WHERE item_id=? AND kind='primary'",
+        (result.item_id,),
+    ).fetchone()
+    assert row is not None
+    items_hash = tmp_db.execute(
+        "SELECT content_hash FROM items WHERE id=?", (result.item_id,)
+    ).fetchone()["content_hash"]
+    assert row["content_hash"] == items_hash
+    assert row["source"] == "crossref"
+
 
 def test_ingest_directory_recursive(
     tmp_db: sqlite3.Connection, pdf_with_doi: Path, pdf_no_identifier: Path, stub_crossref: None
@@ -139,15 +169,20 @@ def test_ingest_directory_recursive(
 def test_conservation_invariant_holds(
     tmp_db: sqlite3.Connection, pdf_with_doi: Path, pdf_copy: Path, stub_crossref: None
 ) -> None:
-    """Plan §7 invariant 1: every ingestion that produced a NEW item lands in
-    items or merge_history. 'merged' at ingest time attaches a file to an
-    existing item without creating a new row — it's not counted here."""
+    """Plan §7 invariant 1: count(items) + count(merge_history) == count(ingest_log).
+
+    Every ingest event either produces a new item (`inserted`/`linked`),
+    re-attaches to an existing item via a merge (`merged` → +1 merge_history),
+    or is skipped as already-imported (`skipped` → also a merge_history row
+    so the conservation count balances)."""
     ingest.ingest_file(tmp_db, pdf_with_doi)
     ingest.ingest_file(tmp_db, pdf_copy)
 
     items = tmp_db.execute("SELECT COUNT(*) FROM items").fetchone()[0]
     merges = tmp_db.execute("SELECT COUNT(*) FROM merge_history").fetchone()[0]
-    new_item_events = tmp_db.execute(
-        "SELECT COUNT(*) FROM ingest_log WHERE result IN ('inserted','linked')"
+    log_total = tmp_db.execute("SELECT COUNT(*) FROM ingest_log").fetchone()[0]
+    log_skipped = tmp_db.execute(
+        "SELECT COUNT(*) FROM ingest_log WHERE result = 'skipped'"
     ).fetchone()[0]
-    assert items + merges == new_item_events
+    # Skipped events don't change either side of the equation.
+    assert items + merges == log_total - log_skipped

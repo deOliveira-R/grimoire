@@ -351,6 +351,40 @@ class TestApply:
         row = tmp_db.execute("SELECT abstract FROM items WHERE id=?", (target,)).fetchone()
         assert row["abstract"] == "original abstract"
 
+    def test_apply_merge_records_merge_history(self, tmp_db: sqlite3.Connection) -> None:
+        """Plan §7 invariant 1 needs every merge to leave a trace so the
+        conservation count balances against ingest_log."""
+        target = _insert(tmp_db, title="X")
+        dedup.apply_merge(
+            tmp_db, target, Metadata(title="X"), reason="doi_match"
+        )
+        rows = tmp_db.execute(
+            "SELECT target_id, reason FROM merge_history"
+        ).fetchall()
+        assert len(rows) == 1
+        assert rows[0]["target_id"] == target
+        assert rows[0]["reason"] == "doi_match"
+
+    def test_apply_merge_records_history_even_when_no_field_updates(
+        self, tmp_db: sqlite3.Connection
+    ) -> None:
+        """A merge where the candidate has no fillable fields still must log
+        a history row — the merge event happened regardless of metadata."""
+        target = _insert(tmp_db, title="Already complete", doi="10.1/x")
+        tmp_db.execute(
+            "UPDATE items SET abstract='full', publication_year=2024, venue='J' "
+            "WHERE id=?",
+            (target,),
+        )
+        dedup.apply_merge(
+            tmp_db,
+            target,
+            Metadata(title="duplicate", doi="10.1/x"),
+            reason="hash_match",
+        )
+        n = tmp_db.execute("SELECT COUNT(*) FROM merge_history").fetchone()[0]
+        assert n == 1
+
     def test_apply_link_creates_symmetric_pair(self, tmp_db: sqlite3.Connection) -> None:
         a = _insert(tmp_db, title="preprint")
         b = _insert(tmp_db, title="published")

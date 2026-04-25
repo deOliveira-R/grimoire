@@ -60,6 +60,32 @@ def store(
     return content_hash
 
 
+def register(
+    conn: sqlite3.Connection,
+    item_id: int,
+    kind: Kind,
+    content_hash: str,
+    *,
+    source: str | None = None,
+    size_bytes: int | None = None,
+) -> None:
+    """Record an (item, kind) → existing CAS hash mapping without re-storing.
+
+    Use when the bytes are already in CAS (e.g. ``cas.store_file`` ran earlier
+    in the same transaction) and we just need the row in ``item_artifacts``.
+    Idempotent: re-runs replace the row in place, mirroring ``store``."""
+    conn.execute(
+        """INSERT INTO item_artifacts(item_id, kind, content_hash, source, size_bytes)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(item_id, kind) DO UPDATE SET
+             content_hash = excluded.content_hash,
+             source       = excluded.source,
+             generated_at = CURRENT_TIMESTAMP,
+             size_bytes   = excluded.size_bytes""",
+        (item_id, kind, content_hash, source, size_bytes),
+    )
+
+
 def get_hash(
     conn: sqlite3.Connection, item_id: int, kind: Kind
 ) -> str | None:

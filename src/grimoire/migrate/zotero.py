@@ -32,6 +32,7 @@ from grimoire.config import settings
 from grimoire.dedup import JudgeFn
 from grimoire.embed.base import Embedder
 from grimoire.models import Author, Metadata
+from grimoire.storage import artifacts
 from grimoire.storage.cas import CAS
 
 log = logging.getLogger(__name__)
@@ -396,7 +397,7 @@ def _import_one(
         if pdf_path is not None:
             cas.store_file(pdf_path)
             report.pdf_attachments_stored += 1
-        dedup.apply_merge(conn, target, metadata)
+        dedup.apply_merge(conn, target, metadata, reason=decision.reason)
         # Persist Zotero id on the merged row so re-runs skip correctly.
         _stamp_zotero_id(conn, target, zi.item_id)
         _record(conn, f"<zotero:{zi.item_id}>", content_hash, "merged", target)
@@ -409,6 +410,10 @@ def _import_one(
         report.pdf_attachments_stored += 1
 
     item_id = _insert_item(conn, metadata, content_hash)
+    if content_hash:
+        artifacts.register(
+            conn, item_id, "primary", content_hash, source=metadata.source
+        )
     _insert_authors_with_roles(conn, item_id, _creators(zotero, zi.item_id))
     _apply_tags(conn, item_id, _tags(zotero, zi.item_id))
     _apply_collections(conn, item_id, _collections(zotero, zi.item_id))

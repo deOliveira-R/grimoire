@@ -33,6 +33,7 @@ from grimoire.models import (
     Metadata,
     merge_metadata_layered,
 )
+from grimoire.storage import artifacts
 from grimoire.resolve import arxiv_api, crossref, llm_fallback, openlibrary
 from grimoire.storage.cas import CAS
 
@@ -66,12 +67,17 @@ def ingest_file(
     content_hash = CAS.hash_file(path)
 
     # Short-circuit: byte-identical re-ingest doesn't need to hit Crossref/GROBID
-    # again. This is tier-1 hash_match semantically — we still log as 'merged'
-    # to match plan §3, but the DB is already consistent and apply_merge would
-    # no-op.
+    # again. This is tier-1 hash_match semantically — we log as 'merged' to
+    # match plan §3 and record a merge_history row so plan §7 invariant 1 stays
+    # balanced (every 'merged' ingest_log row needs a matching merge_history).
     existing = conn.execute("SELECT id FROM items WHERE content_hash=?", (content_hash,)).fetchone()
     if existing:
-        return _record(conn, path, content_hash, "merged", int(existing["id"]), "hash_match")
+        target = int(existing["id"])
+        conn.execute(
+            "INSERT INTO merge_history(target_id, reason) VALUES (?, ?)",
+            (target, "hash_match"),
+        )
+        return _record(conn, path, content_hash, "merged", target, "hash_match")
 
     try:
         metadata = _resolve_metadata(path)
@@ -116,6 +122,10 @@ def _act(
     if decision.outcome == "insert":
         cas.store_file(path)
         item_id = _insert_item(conn, metadata, content_hash)
+        if content_hash:
+            artifacts.register(
+                conn, item_id, "primary", content_hash, source=metadata.source
+            )
         _upsert_authors(conn, item_id, metadata.authors)
         _link_series_parent(conn, item_id, metadata)
         _maybe_split_book(conn, item_id, metadata, content_hash)
@@ -130,7 +140,7 @@ def _act(
         # kept in CAS so we don't lose the source. CAS dedups by hash so if the
         # content is identical, this is a no-op on disk.
         cas.store_file(path)
-        dedup.apply_merge(conn, target, metadata)
+        dedup.apply_merge(conn, target, metadata, reason=decision.reason)
         # Post-merge: the target may have just gained a series field from the
         # candidate, so the parent-link step can newly apply.
         _link_series_parent(conn, target, metadata)
@@ -142,6 +152,10 @@ def _act(
         assert target is not None and relation is not None
         cas.store_file(path)
         item_id = _insert_item(conn, metadata, content_hash)
+        if content_hash:
+            artifacts.register(
+                conn, item_id, "primary", content_hash, source=metadata.source
+            )
         _upsert_authors(conn, item_id, metadata.authors)
         _link_series_parent(conn, item_id, metadata)
         _maybe_split_book(conn, item_id, metadata, content_hash)

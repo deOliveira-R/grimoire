@@ -295,10 +295,21 @@ def _norm_edition(value: str) -> str:
 # ---------- application ---------------------------------------------------
 
 
-def apply_merge(conn: sqlite3.Connection, target_id: int, candidate: Metadata) -> None:
+def apply_merge(
+    conn: sqlite3.Connection,
+    target_id: int,
+    candidate: Metadata,
+    *,
+    reason: str | None = None,
+) -> None:
     """Fill missing fields on the target with values from the candidate (plan §3
     'Union metadata; prefer most-authoritative source'). The existing item is
-    already the authoritative one; we only backfill gaps."""
+    already the authoritative one; we only backfill gaps.
+
+    Records a row in ``merge_history`` so plan §7 invariant 1 holds:
+    ``count(items) + count(merge_history) == count(ingest_log)``. The
+    candidate item never makes it into ``items`` — its merged_id is just a
+    surrogate row in merge_history pointing at the survivor."""
     row = conn.execute(
         """SELECT title, abstract, publication_year, doi, arxiv_id, isbn,
                   venue, volume, issue, pages, series, series_number, edition, language,
@@ -345,6 +356,11 @@ def apply_merge(conn: sqlite3.Connection, target_id: int, candidate: Metadata) -
         )
 
     _union_authors(conn, target_id, candidate.authors)
+
+    conn.execute(
+        "INSERT INTO merge_history(target_id, reason) VALUES (?, ?)",
+        (target_id, reason),
+    )
 
 
 def apply_link(
