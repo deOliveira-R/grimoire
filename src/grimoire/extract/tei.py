@@ -162,13 +162,14 @@ def _references(root: ET.Element) -> list[dict[str, Any]]:
     bibs = root.findall(".//tei:back//tei:listBibl/tei:biblStruct", TEI_NS)
     out: list[dict[str, Any]] = []
     for b in bibs:
-        # ``ElementTree.Element`` is falsy when empty, so ``or`` across two
-        # finds silently drops a parent with no children; use an explicit
-        # None check instead.
-        title_el = b.find("tei:analytic/tei:title", TEI_NS)
-        if title_el is None:
-            title_el = b.find("tei:monogr/tei:title", TEI_NS)
-        title = _text_of(title_el)
+        # GROBID emits ``<analytic><title/>`` even when it can't extract an
+        # article title (common for older journal-article references where
+        # only the venue + volume + page is in the bibliography). Fall back
+        # to ``monogr/title`` whenever the analytic title resolves to empty,
+        # not just when the element is absent.
+        title = _text_of(b.find("tei:analytic/tei:title", TEI_NS))
+        if title is None:
+            title = _text_of(b.find("tei:monogr/tei:title", TEI_NS))
         authors = _authors_in(b, analytic_only=False)
         year = None
         for date in b.findall(".//tei:imprint/tei:date", TEI_NS):

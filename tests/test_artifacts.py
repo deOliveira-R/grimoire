@@ -239,6 +239,49 @@ def test_tei_parse_references() -> None:
     assert refs[0]["authors"] == [{"family": "Author", "given": "X"}]
 
 
+_TEI_EMPTY_ANALYTIC_TITLE = b"""<?xml version="1.0" encoding="UTF-8"?>
+<TEI xmlns="http://www.tei-c.org/ns/1.0">
+  <teiHeader>
+    <fileDesc>
+      <titleStmt><title>host</title></titleStmt>
+      <sourceDesc>
+        <biblStruct><monogr><imprint><date when="2024"/></imprint></monogr></biblStruct>
+      </sourceDesc>
+    </fileDesc>
+  </teiHeader>
+  <text><body/><back><div><listBibl>
+    <biblStruct>
+      <analytic>
+        <title/>
+        <author><persName><surname>Williams</surname></persName></author>
+      </analytic>
+      <monogr>
+        <title level="j">Comm. Pure Appl. Math</title>
+        <imprint><date when="1973"/></imprint>
+      </monogr>
+    </biblStruct>
+  </listBibl></div></back></text>
+</TEI>
+"""
+
+
+def test_tei_reference_falls_back_to_monogr_title_when_analytic_is_empty() -> None:
+    """GROBID emits ``<analytic><title/>`` for journal-article references
+    whose article-level title it couldn't parse out (common in pre-DOI
+    literature). Title resolution must fall back to ``<monogr><title>``
+    rather than returning None."""
+    from grimoire.extract.tei import parse_structure
+
+    s = parse_structure(_TEI_EMPTY_ANALYTIC_TITLE)
+    assert s is not None
+    refs = s["references"]
+    assert len(refs) == 1
+    assert refs[0]["title"] == "Comm. Pure Appl. Math"
+    assert refs[0]["venue"] == "Comm. Pure Appl. Math"
+    assert refs[0]["year"] == 1973
+    assert refs[0]["authors"] == [{"family": "Williams", "given": None}]
+
+
 def test_tei_parse_invalid_returns_none() -> None:
     from grimoire.extract.tei import parse_structure
 
