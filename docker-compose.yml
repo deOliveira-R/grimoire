@@ -31,6 +31,11 @@ services:
 
   # GROBID: structural extraction of title/abstract/authors/DOI from PDF headers.
   # CPU-only CRF build — ~1.8 GB image, ~500 MB RAM idle, ~1-3 s per paper.
+  # Pinned to 0.8.1 (amd64-only): tested 2026-04-25 on a 1982 OCR'd scan
+  # and a citation-heavy 2022 paper. The newer multi-arch
+  # ``lfoppiano/grobid:0.9.0-crf`` runs natively on arm64 but crashes
+  # the engine pool on citation-heavy fulltext extraction; revisit
+  # when upstream patches the regression.
   grobid:
     image: lfoppiano/grobid:0.8.1
     container_name: grimoire-grobid
@@ -38,4 +43,4 @@ services:
     ports:
       - "8070:8070"
     environment:
-      JAVA_OPTS: "-Xmx1g"
+      JAVA_OPTS: "-Xmx2g"
