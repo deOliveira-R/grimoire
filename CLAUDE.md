@@ -1,6 +1,6 @@
 # Grimoire — working notes for Claude Code
 
-Self-hosted literature server. Full design and rationale live in the implementation plan (the working document Rodrigo keeps alongside this repo).
+Self-hosted literature server. v2 work follows [`.claude/plans/v2-living-plan.md`](.claude/plans/v2-living-plan.md), a snapshot of the living plan doc; the v1 plan (Phases 0–7 below) is the shipped baseline.
 
 ## Rules of engagement
 
